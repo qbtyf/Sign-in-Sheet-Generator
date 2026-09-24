@@ -1,0 +1,15 @@
+# 编译产物（不入库，可发 Release）
+*.exe
+bin/
+测试输出/
+
+# 临时文件
+*.log
+smoke*.json
+smoke_cookies.txt
+smoke_server.txt
+vet_out.txt
+build_err.txt
+e2e_out.txt
+e2e_build_err.txt
+test_out.txt
