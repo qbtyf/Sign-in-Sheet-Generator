@@ -4,6 +4,7 @@
 package main
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -157,6 +158,9 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/upload", handleUpload)
 	mux.HandleFunc("POST /api/read", handleRead)
 	mux.HandleFunc("POST /api/fill", handleFill)
+	mux.HandleFunc("POST /api/merge", handleMerge)
+	mux.HandleFunc("POST /api/split", handleSplit)
+	mux.HandleFunc("GET /api/zip", handleZip)
 	mux.HandleFunc("GET /api/download", handleDownload)
 }
 
@@ -287,6 +291,16 @@ func handleRead(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// readSource 按文件名＋数据源 key 读取一张表（xlsx 工作表 / docx 表格）
+func readSource(path, key string, headerRow int) (*roster.Table, error) {
+	if strings.HasPrefix(key, "xlsx:") {
+		return roster.ReadXlsxSheet(path, strings.TrimPrefix(key, "xlsx:"), headerRow)
+	}
+	idx := 0
+	fmt.Sscanf(strings.TrimPrefix(key, "docx:"), "%d", &idx)
+	return roster.ReadDocxSheet(path, idx, headerRow)
+}
+
 // fillRequest /api/fill 请求体
 type fillRequest struct {
 	TplPath      string `json:"tplPath"`
@@ -358,6 +372,222 @@ func handleFill(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("填充完成: %s（%d 行数据）", outName, len(src.Rows))
 	writeJSON(w, map[string]any{"file": outName, "rows": len(src.Rows)})
+}
+
+// mergeSourceSpec 一个合并来源（前端传）
+type mergeSourceSpec struct {
+	Path      string `json:"path"`
+	Key       string `json:"key"`
+	HeaderRow int    `json:"headerRow"`
+	Mapping   []int  `json:"mapping"` // 总表字段下标 → 来源字段下标（-1 填空）
+}
+
+// mergeRequest /api/merge 请求体
+type mergeRequest struct {
+	Base      []string          `json:"base"`      // 总表字段（基准表字段＋新增字段）
+	Sources   []mergeSourceSpec `json:"sources"`   // 顺序 = 合并顺序
+	SourceCol bool              `json:"sourceCol"` // 末尾加「来源」列
+	Dedup     int               `json:"dedup"`     // 按总表字段下标判重，-1 不判重
+	BasePath  string            `json:"basePath"`  // 基准表文件（决定输出格式 xlsx/docx）
+}
+
+// handleMerge 多表合一：读各来源 → 引擎合并 → 按基准表格式输出
+func handleMerge(w http.ResponseWriter, r *http.Request) {
+	var req mergeRequest
+	if err := readBody(r, &req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if len(req.Base) == 0 {
+		writeErr(w, 400, "总表没有字段，请先完成字段映射")
+		return
+	}
+	if len(req.Sources) < 1 {
+		writeErr(w, 400, "至少需要一个来源表")
+		return
+	}
+	if req.Dedup < -1 {
+		req.Dedup = -1
+	}
+
+	srcs := make([]tabfill.SrcTable, len(req.Sources))
+	for i, s := range req.Sources {
+		if s.HeaderRow < 1 {
+			s.HeaderRow = 1
+		}
+		path, key, err := resolve(s.Path, s.Key)
+		if err != nil {
+			writeErr(w, 400, fmt.Sprintf("来源表 %d: %v", i+1, err))
+			return
+		}
+		tbl, err := readSource(path, key, s.HeaderRow)
+		if err != nil {
+			writeErr(w, 400, fmt.Sprintf("读取来源表 %d 失败: %v", i+1, err))
+			return
+		}
+		name := s.Path
+		// 去掉上传时加的 "src-<纳秒>-" 前缀，保留用户可读的文件名
+		if parts := strings.SplitN(name, "-", 3); len(parts) == 3 {
+			name = parts[2]
+		}
+		srcs[i] = tabfill.SrcTable{Name: name, Headers: tbl.Headers, Rows: tbl.Rows}
+	}
+
+	spec := tabfill.MergeSpec{Base: req.Base, SourceCol: req.SourceCol, Dedup: req.Dedup}
+	for _, s := range req.Sources {
+		if len(s.Mapping) != len(req.Base) {
+			writeErr(w, 400, "字段映射长度与总表字段数不一致，请刷新重试")
+			return
+		}
+		spec.PerSource = append(spec.PerSource, s.Mapping)
+	}
+	res, err := tabfill.Merge(spec, srcs)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if len(res.Rows) == 0 {
+		writeErr(w, 400, "合并结果为 0 行（所有来源表都没有数据）")
+		return
+	}
+
+	outName := fmt.Sprintf("合并总表-%s%s", time.Now().Format("20060102-150405"), outExt(req.BasePath))
+	outPath := filepath.Join(workDir, outSub, outName)
+	if strings.EqualFold(filepath.Ext(outName), ".docx") {
+		err = tabfill.WriteDocxTable(res.Headers, res.Rows, "", outPath)
+	} else {
+		err = tabfill.WriteXlsxTable(res.Headers, res.Rows, outPath)
+	}
+	if err != nil {
+		log.Printf("合并失败: %v", err)
+		writeErr(w, 400, err.Error())
+		return
+	}
+	log.Printf("合并完成: %s（%d 个来源，%d 行）", outName, len(srcs), len(res.Rows))
+	writeJSON(w, map[string]any{"file": outName, "rows": len(res.Rows)})
+}
+
+// outExt 依据基准表文件扩展名决定输出扩展名（默认 .xlsx）
+func outExt(basePath string) string {
+	if strings.EqualFold(filepath.Ext(basePath), ".docx") {
+		return ".docx"
+	}
+	return ".xlsx"
+}
+// splitRequest /api/split 请求体
+type splitRequest struct {
+	Path      string `json:"path"`
+	Key       string `json:"key"`
+	HeaderRow int    `json:"headerRow"`
+	Mode      string `json:"mode"`  // byValue / byRows
+	Field     int    `json:"field"` // byValue：拆分字段下标
+	Size      int    `json:"size"`  // byRows：每份行数
+	OutFmt    string `json:"outFmt"` // 输出格式 ".xlsx" / ".docx"，空 = 跟随输入
+}
+
+// handleSplit 拆分表格：读总表 → 引擎分组 → 逐份落盘，返回文件清单
+func handleSplit(w http.ResponseWriter, r *http.Request) {
+	var req splitRequest
+	if err := readBody(r, &req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if req.HeaderRow < 1 {
+		req.HeaderRow = 1
+	}
+	path, key, err := resolve(req.Path, req.Key)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	tbl, err := readSource(path, key, req.HeaderRow)
+	if err != nil {
+		writeErr(w, 400, "读取总表失败: "+err.Error())
+		return
+	}
+
+	spec := tabfill.SplitSpec{Headers: tbl.Headers, Rows: tbl.Rows, Mode: req.Mode, Field: req.Field, Size: req.Size}
+	groups, err := tabfill.Split(spec)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+
+	ext := req.OutFmt
+	if ext != ".docx" && ext != ".xlsx" {
+		ext = strings.ToLower(filepath.Ext(req.Path)) // 跟随输入
+		if ext != ".docx" {
+			ext = ".xlsx"
+		}
+	}
+	stem := strings.TrimSuffix(filepath.Base(req.Path), filepath.Ext(req.Path))
+	// 去掉上传时加的 "src-<纳秒>-" 前缀
+	if parts := strings.SplitN(stem, "-", 3); len(parts) == 3 {
+		stem = parts[2]
+	}
+
+	type outFile struct {
+		File string `json:"file"`
+		Rows int    `json:"rows"`
+	}
+	var files []outFile
+	for _, g := range groups {
+		outName := fmt.Sprintf("%s-%s%s", tabfill.SanitizeFileName(stem), tabfill.SanitizeFileName(g.Name), ext)
+		outPath := filepath.Join(workDir, outSub, outName)
+		if ext == ".docx" {
+			err = tabfill.WriteDocxTable(tbl.Headers, g.Rows, g.Name, outPath)
+		} else {
+			err = tabfill.WriteXlsxTable(tbl.Headers, g.Rows, outPath)
+		}
+		if err != nil {
+			log.Printf("拆分失败: %v", err)
+			writeErr(w, 400, err.Error())
+			return
+		}
+		files = append(files, outFile{File: outName, Rows: len(g.Rows)})
+	}
+	log.Printf("拆分完成: %s → %d 份（%s）", stem, len(files), req.Mode)
+	writeJSON(w, map[string]any{"files": files, "base": stem})
+}
+
+// handleZip 把指定的输出文件打包成一个 zip 供下载
+func handleZip(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	var names []string
+	for _, n := range strings.Split(q.Get("names"), ",") {
+		if n = filepath.Base(strings.TrimSpace(n)); n != "" && n != "." && n != ".." {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		writeErr(w, 400, "没有要打包的文件")
+		return
+	}
+	zipName := fmt.Sprintf("拆分结果-%s.zip", time.Now().Format("20060102-150405"))
+	zipPath := filepath.Join(workDir, outSub, zipName)
+	zf, err := os.Create(zipPath)
+	if err != nil {
+		writeErr(w, 500, "创建 zip 失败: "+err.Error())
+		return
+	}
+	zw := zip.NewWriter(zf)
+	for _, n := range names {
+		data, err := os.ReadFile(filepath.Join(workDir, outSub, n))
+		if err != nil {
+			continue // 单个缺失不阻断
+		}
+		fe, err := zw.Create(n)
+		if err == nil {
+			_, _ = fe.Write(data)
+		}
+	}
+	_ = zw.Close()
+	_ = zf.Close()
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", url.PathEscape(zipName)))
+	data, _ := os.ReadFile(zipPath)
+	_, _ = w.Write(data)
 }
 
 // handleDownload 提供输出文件下载

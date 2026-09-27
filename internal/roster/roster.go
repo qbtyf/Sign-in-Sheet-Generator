@@ -3,7 +3,10 @@
 package roster
 
 import (
+	"archive/zip"
 	"fmt"
+	"io"
+	"regexp"
 	"strings"
 
 	"github.com/xuri/excelize/v2"
@@ -19,6 +22,7 @@ type SheetInfo struct {
 	Headers        []string `json:"headers"`        // 表头内容
 	DataRows       int      `json:"dataRows"`       // 表头之下的数据行数
 	TotalRows      int      `json:"totalRows"`      // 工作表总行数
+	Hidden         bool     `json:"hidden"`         // 工作表是否隐藏（docx 表格恒为 false）
 }
 
 // Table 选定工作表后的完整数据
@@ -27,13 +31,18 @@ type Table struct {
 	Rows    [][]string `json:"rows"` // 数据行（等宽补齐）
 }
 
-// LoadXlsx 列出 xlsx 中所有工作表概要
+// LoadXlsx 列出 xlsx 中所有工作表概要（含隐藏表，隐藏表带标注）
 func LoadXlsx(path string) ([]SheetInfo, error) {
 	f, err := excelize.OpenFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("打开 Excel 失败: %w", err)
 	}
 	defer f.Close()
+
+	hidden, err := loadHiddenSheets(path)
+	if err != nil {
+		hidden = map[string]bool{} // 读取失败按全部可见处理
+	}
 
 	var out []SheetInfo
 	for _, name := range f.GetSheetList() {
@@ -45,6 +54,7 @@ func LoadXlsx(path string) ([]SheetInfo, error) {
 			Key:       "xlsx:" + name,
 			Label:     name,
 			TotalRows: len(rows),
+			Hidden:    hidden[name],
 		}
 		hdr, data := detectHeader(rows)
 		info.HeaderRow = hdr + 1 // 转 1 基
@@ -69,6 +79,50 @@ func ReadXlsxSheet(path, sheet string, headerRow int) (*Table, error) {
 		return nil, err
 	}
 	return buildTable(rows, headerRow-1), nil
+}
+
+// loadHiddenSheets 从 xlsx 的 workbook.xml 解析隐藏工作表名集合。
+// excelize v2.8.1 无读取可见性的公开 API，这里直接读 XML：
+// <sheet name="xx" sheetId="1" r:id="rId1" state="hidden|veryHidden"/>
+func loadHiddenSheets(path string) (map[string]bool, error) {
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	var xmlData []byte
+	for _, zf := range zr.File {
+		if strings.EqualFold(zf.Name, "xl/workbook.xml") {
+			rc, e := zf.Open()
+			if e != nil {
+				return nil, e
+			}
+			xmlData, _ = io.ReadAll(rc)
+			rc.Close()
+			break
+		}
+	}
+	if xmlData == nil {
+		return nil, fmt.Errorf("workbook.xml 不存在")
+	}
+	out := map[string]bool{}
+	re := regexp.MustCompile(`<sheet\b[^>]*>`)
+	for _, m := range re.FindAllString(string(xmlData), -1) {
+		nameRe := regexp.MustCompile(`name="([^"]*)"`)
+		nm := nameRe.FindStringSubmatch(m)
+		if nm == nil {
+			continue
+		}
+		if strings.Contains(m, `state="hidden"`) || strings.Contains(m, `state="veryHidden"`) {
+			out[xmlUnescape(nm[1])] = true
+		}
+	}
+	return out, nil
+}
+
+// xmlUnescape XML 属性值反转义（工作表名可能含 &amp; 等）
+func xmlUnescape(s string) string {
+	return strings.NewReplacer("&amp;", "&", "&lt;", "<", "&gt;", ">", "&quot;", `"`, "&apos;", "'").Replace(s)
 }
 
 // LoadDocx 列出 docx 中所有顶层表格概要（每张表当一个工作表）

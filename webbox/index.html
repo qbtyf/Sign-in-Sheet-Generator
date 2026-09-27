@@ -22,17 +22,17 @@
       <div class="card-desc">把原始表格的数据，按字段对应关系批量填进模板表格。支持 Excel ↔ Word 任意组合。</div>
       <div class="card-badge ok">可用</div>
     </div>
-    <div class="card coming">
+    <div class="card available" data-tool="merge">
       <div class="card-icon">🔗</div>
       <div class="card-title">多表合一</div>
-      <div class="card-desc">把多个结构相同的表格合并成一张总表。</div>
-      <div class="card-badge">规划中</div>
+      <div class="card-desc">把多个结构相同的表格合并成一张总表。字段自动对应，可手选映射或新增字段。</div>
+      <div class="card-badge ok">可用</div>
     </div>
-    <div class="card coming">
+    <div class="card available" data-tool="split">
       <div class="card-icon">✂️</div>
       <div class="card-title">拆分表格</div>
-      <div class="card-desc">把一张总表按条件拆成多个独立表格文件。</div>
-      <div class="card-badge">规划中</div>
+      <div class="card-desc">把一张总表按字段取值或行数拆成多个独立表格文件。</div>
+      <div class="card-badge ok">可用</div>
     </div>
     <div class="card coming">
       <div class="card-icon">📑</div>
@@ -107,6 +107,99 @@
     <h3><span class="step-no">3</span> 生成</h3>
     <button id="btn-fill" class="btn-primary">开始填充生成</button>
     <div id="fill-result" class="result hidden"></div>
+  </section>
+</main>
+
+<!-- ============ 工具：多表合一 ============ -->
+<main id="view-merge" class="container hidden">
+  <div class="crumbs"><a class="back-home">← 返回首页</a><span class="crumb-sep">/</span><b>多表合一</b></div>
+
+  <div class="err hidden" id="err-merge"></div>
+
+  <!-- 第①步：上传来源表 -->
+  <section class="panel">
+    <h3><span class="step-no">1</span> 上传要合并的表格 <small>（可多选；隐藏的工作表也会列出并标注）</small></h3>
+    <label class="upload-btn">＋ 选择 xlsx / docx 文件（支持多选）
+      <input type="file" id="file-merge" accept=".xlsx,.docx" multiple hidden>
+    </label>
+    <p class="hint">第一个上传的表作为基准表，决定总表字段；可随时点「设为基准」更换。</p>
+    <div id="merge-files"></div>
+  </section>
+
+  <!-- 第②步：字段映射 -->
+  <section class="panel">
+    <h3><span class="step-no">2</span> 总表字段与映射</h3>
+    <div class="field-row">
+      <label>总表字段：</label>
+      <span class="chips" id="merge-base-chips"></span>
+    </div>
+    <div class="field-row">
+      <input type="text" id="merge-new-field" class="txt" placeholder="新增字段名，如：备注" maxlength="30">
+      <button id="btn-merge-addfield" class="btn-ghost">＋ 新增总表字段</button>
+    </div>
+    <div id="merge-maps"></div>
+    <p class="hint hidden" id="merge-map-hint">请先完成第 ① 步（至少上传一个文件）</p>
+  </section>
+
+  <!-- 第③步：选项与生成 -->
+  <section class="panel">
+    <h3><span class="step-no">3</span> 选项与生成</h3>
+    <div class="field-row"><label class="ck"><input type="checkbox" id="merge-source-col"> 总表末尾加「来源」列（记录每行来自哪个文件）</label></div>
+    <div class="field-row"><label class="ck"><input type="checkbox" id="merge-dedup-on"> 判重（按下方字段值去重，保留首次出现）</label>
+      <select id="merge-dedup-field" class="sel-inline"></select>
+    </div>
+    <button id="btn-merge" class="btn-primary">开始合并</button>
+    <div id="merge-result" class="result hidden"></div>
+  </section>
+</main>
+
+<!-- ============ 工具：拆分表格 ============ -->
+<main id="view-split" class="container hidden">
+  <div class="crumbs"><a class="back-home">← 返回首页</a><span class="crumb-sep">/</span><b>拆分表格</b></div>
+
+  <div class="err hidden" id="err-split"></div>
+
+  <!-- 第①步：上传总表 -->
+  <section class="panel">
+    <h3><span class="step-no">1</span> 上传要拆分的总表</h3>
+    <label class="upload-btn">＋ 选择 xlsx / docx 文件
+      <input type="file" id="file-split" accept=".xlsx,.docx" hidden>
+    </label>
+    <div class="src-detail hidden" id="detail-split">
+      <div class="field-row"><span class="fname" id="fname-split"></span></div>
+      <div class="field-row">
+        <label>数据源：</label>
+        <select id="sel-split"></select>
+        <label style="margin-left:16px">表头行：</label>
+        <input type="number" id="hdr-split" min="1" value="1" class="num">
+      </div>
+      <div class="meta" id="meta-split"></div>
+      <div class="preview-wrap"><table class="preview" id="prev-split"></table></div>
+    </div>
+  </section>
+
+  <!-- 第②步：拆分方式 -->
+  <section class="panel">
+    <h3><span class="step-no">2</span> 拆分方式</h3>
+    <div class="field-row">
+      <label class="ck"><input type="radio" name="split-mode" value="byValue" checked> 按字段取值拆</label>
+      <select id="split-field" class="sel-inline"></select>
+      <span class="hint">（该字段取值相同的行归一份，如按「部门」拆）</span>
+    </div>
+    <div class="field-row">
+      <label class="ck"><input type="radio" name="split-mode" value="byRows"> 按行数拆</label>
+      每 <input type="number" id="split-size" min="1" value="50" class="num"> 行一份
+    </div>
+    <div class="field-row">
+      <label>输出格式：</label>
+      <select id="split-outfmt">
+        <option value="">跟随总表格式</option>
+        <option value=".xlsx">Excel（.xlsx）</option>
+        <option value=".docx">Word（.docx）</option>
+      </select>
+    </div>
+    <button id="btn-split" class="btn-primary" disabled>开始拆分</button>
+    <div id="split-result" class="result hidden"></div>
   </section>
 </main>
 

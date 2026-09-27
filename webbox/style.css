@@ -156,3 +156,25 @@ table.preview th { background: #f0f3f8; position: sticky; top: 0; }
   border: 1px solid #f3c1bc; border-radius: 8px;
   padding: 10px 14px; margin-bottom: 14px;
 }
+
+/* ---- 多表合一 ---- */
+.muted { color: var(--muted); font-size: 12px; }
+.merge-file {
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 14px; margin: 10px 0;
+}
+.merge-file.is-base { border-color: var(--brand); background: #f5f9ff; }
+.merge-file-title { margin-bottom: 6px; }
+.merge-map-panel {
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px 14px; margin: 10px 0;
+}
+.merge-map-title { margin-bottom: 8px; }
+input.txt {
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px;
+  font-size: 13px; width: 220px;
+}
+.sel-inline { flex: none; min-width: 120px; }
+label.ck { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.btn-ghost.danger:hover { color: var(--warn-text); border-color: var(--warn-text); }
+.result div { margin: 4px 0; }
