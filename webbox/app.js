@@ -14,7 +14,7 @@ $('brand-home').addEventListener('click', showHome);
 document.querySelectorAll('.back-home').forEach((a) => a.addEventListener('click', showHome));
 
 function showView(name) {
-  ['home', 'fill', 'merge', 'split'].forEach((v) => $('view-' + v).classList.add('hidden'));
+  ['home', 'fill', 'merge', 'split', 'inmerge'].forEach((v) => $('view-' + v).classList.add('hidden'));
   $('view-' + name).classList.remove('hidden');
   clearErr();
 }
@@ -333,7 +333,12 @@ async function readMergeTable(idx) {
 
 // remap 按总表字段对该来源表重新自动配对（同名对应，否则 -1）
 function remap(it) {
-  it.maps = M.base.map((b) => {
+  remapTo(it, M.base);
+}
+
+// remapTo 按 base 字段清单对来源表 it 重新自动配对（多表合一/表格内合并共用）
+function remapTo(it, base) {
+  it.maps = base.map((b) => {
     const j = (it.headers || []).findIndex((h) => (h || '').trim() === (b || '').trim());
     return j;
   });
@@ -709,5 +714,308 @@ $('btn-split').addEventListener('click', async () => {
   } finally {
     btn.disabled = false;
     btn.textContent = '开始拆分';
+  }
+});
+
+// ===========================================================================
+// 工具四：表格内合并（V1.2：同一文件内的多个工作表/表格 → 一张总表）
+// ===========================================================================
+
+const IM = {
+  path: '', name: '',
+  sheets: [],  // 服务端返回的 SheetInfo 清单（含 hidden 标注）
+  items: {},   // key -> {key,label,hidden,checked,headerRow,headers,rowCount,maps}
+  baseKey: '', // 基准表 key
+  base: [],    // 总表字段（基准表字段＋新增）
+};
+
+$('file-inmerge').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  clearErr();
+  try {
+    const fd = new FormData();
+    fd.append('file', f);
+    fd.append('kind', 'src');
+    const data = await api('/api/upload', { method: 'POST', body: fd });
+    IM.path = data.path;
+    IM.name = data.name;
+    IM.sheets = data.sheets;
+    IM.items = {};
+    IM.baseKey = '';
+    IM.base = [];
+    $('fname-inmerge').textContent = data.name;
+    $('detail-inmerge').classList.remove('hidden');
+    $('inmerge-result').classList.add('hidden');
+    renderInSheets();
+    renderInMaps();
+    // 默认勾选第一张有数据的表
+    const first = data.sheets.find((s) => s.dataRows > 0);
+    if (first) await toggleInSheet(IM.items[first.key], true);
+  } catch (err) {
+    showErr(err.message);
+  }
+});
+
+function inCheckedItems() {
+  return IM.sheets.map((s) => IM.items[s.key]).filter((x) => x.checked && x.headers);
+}
+
+// renderInSheets 渲染工作表勾选清单
+function renderInSheets() {
+  const box = $('inmerge-sheets');
+  box.innerHTML = '';
+  IM.sheets.forEach((s) => {
+    const it = IM.items[s.key] || (IM.items[s.key] = { key: s.key, label: s.label, hidden: s.hidden, checked: false, headerRow: s.headerRow || 1, headers: null, rowCount: s.dataRows, maps: [] });
+    const row = document.createElement('div');
+    row.className = 'inmerge-sheet' + (it.checked ? ' checked' : '') + (it.key === IM.baseKey ? ' is-base' : '');
+
+    const ck = document.createElement('label');
+    ck.className = 'ck inmerge-ck';
+    const box1 = document.createElement('input');
+    box1.type = 'checkbox';
+    box1.checked = it.checked;
+    box1.addEventListener('change', () => toggleInSheet(it, box1.checked));
+    ck.appendChild(box1);
+    const txt = document.createElement('span');
+    txt.textContent = sheetOptText(s);
+    ck.appendChild(txt);
+    row.appendChild(ck);
+
+    if (it.checked) {
+      const lab2 = document.createElement('label');
+      lab2.textContent = '表头行：';
+      lab2.style.marginLeft = '10px';
+      row.appendChild(lab2);
+      const hdr = document.createElement('input');
+      hdr.type = 'number'; hdr.min = '1'; hdr.value = String(it.headerRow); hdr.className = 'num';
+      hdr.addEventListener('change', async () => {
+        it.headerRow = parseInt(hdr.value, 10) || 1;
+        try {
+          await readInSheet(it);
+          setInBase(IM.baseKey);
+          renderInSheets(); renderInMaps();
+        } catch (err) { showErr(err.message); }
+      });
+      row.appendChild(hdr);
+
+      const btnBase = document.createElement('button');
+      btnBase.className = 'btn-ghost';
+      btnBase.textContent = '设为基准';
+      btnBase.disabled = it.key === IM.baseKey;
+      btnBase.addEventListener('click', () => { setInBase(it.key); renderInSheets(); renderInMaps(); });
+      row.appendChild(btnBase);
+
+      if (it.key === IM.baseKey) {
+        const tag = document.createElement('span');
+        tag.className = 'auto-tag';
+        tag.textContent = '基准表';
+        row.appendChild(tag);
+      }
+    }
+    box.appendChild(row);
+  });
+}
+
+// toggleInSheet 勾选/取消勾选一个工作表（勾选时读取其数据）
+async function toggleInSheet(it, on) {
+  it.checked = on;
+  if (on && !it.headers) {
+    try {
+      await readInSheet(it);
+    } catch (err) {
+      it.checked = false;
+      showErr(err.message);
+      renderInSheets();
+      return;
+    }
+  }
+  if (!on && IM.baseKey === it.key) {
+    IM.baseKey = '';
+    const first = inCheckedItems()[0];
+    if (first) IM.baseKey = first.key;
+  }
+  if (on && !IM.baseKey) IM.baseKey = it.key;
+  if (IM.baseKey) setInBase(IM.baseKey);
+  else IM.base = [];
+  renderInSheets();
+  renderInMaps();
+}
+
+// readInSheet 读取某工作表数据（按其表头行）
+async function readInSheet(it) {
+  const data = await api('/api/read', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: IM.path, key: it.key, headerRow: it.headerRow }),
+  });
+  it.headers = data.headers;
+  it.rowCount = data.rowCount;
+  remapTo(it, IM.base);
+}
+
+// setInBase 以指定工作表为基准：总表字段 = 其字段（去重空列），全部来源重配
+function setInBase(key) {
+  const it = IM.items[key];
+  if (!it || !it.headers) return;
+  const seen = new Set();
+  IM.base = it.headers.filter((h) => {
+    const k = (h || '').trim();
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  IM.baseKey = key;
+  IM.sheets.forEach((s) => remapTo(IM.items[s.key], IM.base));
+}
+
+$('btn-inmerge-addfield').addEventListener('click', () => {
+  const inp = $('inmerge-new-field');
+  const name = (inp.value || '').trim();
+  if (!name) { showErr('请输入要新增的字段名'); return; }
+  if (IM.base.includes(name)) { showErr('总表已有字段「' + name + '」'); return; }
+  clearErr();
+  IM.base.push(name);
+  IM.sheets.forEach((s) => {
+    const it = IM.items[s.key];
+    it.maps.push((it.headers || []).findIndex((h) => (h || '').trim() === name));
+  });
+  inp.value = '';
+  renderInMaps();
+});
+
+// renderInMaps 渲染总表字段 chips 与各勾选来源的映射面板
+function renderInMaps() {
+  const box = $('inmerge-maps');
+  const hint = $('inmerge-map-hint');
+  const chips = $('inmerge-base-chips');
+  const dedupSel = $('inmerge-dedup-field');
+  chips.innerHTML = '';
+  dedupSel.innerHTML = '';
+  const srcs = inCheckedItems();
+  if (!srcs.length || !IM.base.length) {
+    box.innerHTML = '';
+    hint.classList.remove('hidden');
+    return;
+  }
+  hint.classList.add('hidden');
+
+  IM.base.forEach((b, c) => {
+    const el = document.createElement('span');
+    el.className = 'chip';
+    el.textContent = b;
+    chips.appendChild(el);
+
+    const o = document.createElement('option');
+    o.value = String(c);
+    o.textContent = b;
+    dedupSel.appendChild(o);
+  });
+
+  box.innerHTML = '';
+  srcs.forEach((it) => {
+    const panel = document.createElement('div');
+    panel.className = 'merge-map-panel';
+    const title = document.createElement('div');
+    title.className = 'merge-map-title';
+    const sheetName = it.key.startsWith('xlsx:') ? it.key.slice(5) : it.key.replace(/^docx:/, '表格');
+    title.innerHTML = '<b>' + escapeHtml(it.label || sheetName) + '</b>'
+      + (it.key === IM.baseKey ? '<span class="auto-tag">基准表</span>' : '')
+      + ' → 总表字段';
+    panel.appendChild(title);
+
+    IM.base.forEach((b, c) => {
+      const row = document.createElement('div');
+      row.className = 'map-row' + ((it.maps[c] || -1) >= 0 ? ' auto' : '');
+
+      const left = document.createElement('div');
+      left.className = 'tpl-name';
+      left.textContent = b;
+      if ((it.maps[c] || -1) >= 0) {
+        const tag = document.createElement('span');
+        tag.className = 'auto-tag';
+        tag.textContent = '自动';
+        left.appendChild(tag);
+      }
+
+      const arrow = document.createElement('div');
+      arrow.className = 'arrow';
+      arrow.textContent = '→';
+
+      const right = document.createElement('select');
+      const optNone = document.createElement('option');
+      optNone.value = '-1';
+      optNone.textContent = '留空';
+      right.appendChild(optNone);
+      (it.headers || []).forEach((h, j) => {
+        if (!(h || '').trim()) return;
+        const o = document.createElement('option');
+        o.value = String(j);
+        o.textContent = h;
+        right.appendChild(o);
+      });
+      right.value = String(it.maps[c] === undefined ? -1 : it.maps[c]);
+      right.addEventListener('change', () => {
+        it.maps[c] = parseInt(right.value, 10);
+        row.classList.toggle('auto', it.maps[c] >= 0);
+        const tag = row.querySelector('.auto-tag');
+        if (it.maps[c] >= 0 && !tag) {
+          const t = document.createElement('span');
+          t.className = 'auto-tag';
+          t.textContent = '自动';
+          left.appendChild(t);
+        } else if (it.maps[c] < 0 && tag) {
+          tag.remove();
+        }
+      });
+
+      row.appendChild(left);
+      row.appendChild(arrow);
+      row.appendChild(right);
+      panel.appendChild(row);
+    });
+    box.appendChild(panel);
+  });
+}
+
+$('btn-inmerge').addEventListener('click', async () => {
+  clearErr();
+  $('inmerge-result').classList.add('hidden');
+  const srcs = inCheckedItems();
+  if (!srcs.length) { showErr('请先勾选要合并的工作表'); return; }
+  if (!IM.base.length) { showErr('总表没有字段，请设置基准表'); return; }
+
+  let dedup = -1;
+  if ($('inmerge-dedup-on').checked) {
+    dedup = parseInt($('inmerge-dedup-field').value, 10);
+    if (isNaN(dedup) || dedup < 0) { showErr('请选择判重字段'); return; }
+  }
+
+  const btn = $('btn-inmerge');
+  btn.disabled = true;
+  btn.textContent = '正在合并…';
+  try {
+    const data = await api('/api/merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        base: IM.base,
+        sources: srcs.map((it) => ({ path: IM.path, key: it.key, headerRow: it.headerRow, mapping: it.maps, name: it.label })),
+        sourceCol: $('inmerge-source-col').checked,
+        dedup: dedup,
+        basePath: IM.path,
+        outFmt: $('inmerge-outfmt').value,
+      }),
+    });
+    const box = $('inmerge-result');
+    box.innerHTML = '<div class="ok-line">✅ 合并完成：' + srcs.length + ' 个工作表，共 ' + data.rows + ' 行数据</div>'
+      + '<a href="/api/download?name=' + encodeURIComponent(data.file) + '" download>下载 ' + escapeHtml(data.file) + '</a>';
+    box.classList.remove('hidden');
+  } catch (err) {
+    showErr(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '开始合并';
   }
 });

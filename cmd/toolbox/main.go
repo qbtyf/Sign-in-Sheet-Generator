@@ -380,6 +380,7 @@ type mergeSourceSpec struct {
 	Key       string `json:"key"`
 	HeaderRow int    `json:"headerRow"`
 	Mapping   []int  `json:"mapping"` // 总表字段下标 → 来源字段下标（-1 填空）
+	Name      string `json:"name"`    // 可选：来源显示名（表格内合并时=工作表名，用于来源列）
 }
 
 // mergeRequest /api/merge 请求体
@@ -389,6 +390,7 @@ type mergeRequest struct {
 	SourceCol bool              `json:"sourceCol"` // 末尾加「来源」列
 	Dedup     int               `json:"dedup"`     // 按总表字段下标判重，-1 不判重
 	BasePath  string            `json:"basePath"`  // 基准表文件（决定输出格式 xlsx/docx）
+	OutFmt    string            `json:"outFmt"`    // 可选：".xlsx"/".docx"，空 = 跟随基准表
 }
 
 // handleMerge 多表合一：读各来源 → 引擎合并 → 按基准表格式输出
@@ -425,10 +427,13 @@ func handleMerge(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, fmt.Sprintf("读取来源表 %d 失败: %v", i+1, err))
 			return
 		}
-		name := s.Path
-		// 去掉上传时加的 "src-<纳秒>-" 前缀，保留用户可读的文件名
-		if parts := strings.SplitN(name, "-", 3); len(parts) == 3 {
-			name = parts[2]
+		name := s.Name // 前端显式给了显示名（表格内合并=工作表名）则优先
+		if name == "" {
+			// 去掉上传时加的 "src-<纳秒>-" 前缀，保留用户可读的文件名
+			name = s.Path
+			if parts := strings.SplitN(name, "-", 3); len(parts) == 3 {
+				name = parts[2]
+			}
 		}
 		srcs[i] = tabfill.SrcTable{Name: name, Headers: tbl.Headers, Rows: tbl.Rows}
 	}
@@ -451,7 +456,11 @@ func handleMerge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	outName := fmt.Sprintf("合并总表-%s%s", time.Now().Format("20060102-150405"), outExt(req.BasePath))
+	ext := outExt(req.BasePath)
+	if req.OutFmt == ".xlsx" || req.OutFmt == ".docx" {
+		ext = req.OutFmt // 前端显式指定输出格式时优先
+	}
+	outName := fmt.Sprintf("合并总表-%s%s", time.Now().Format("20060102-150405"), ext)
 	outPath := filepath.Join(workDir, outSub, outName)
 	if strings.EqualFold(filepath.Ext(outName), ".docx") {
 		err = tabfill.WriteDocxTable(res.Headers, res.Rows, "", outPath)

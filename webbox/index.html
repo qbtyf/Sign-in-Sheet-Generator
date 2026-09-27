@@ -34,6 +34,12 @@
       <div class="card-desc">把一张总表按字段取值或行数拆成多个独立表格文件。</div>
       <div class="card-badge ok">可用</div>
     </div>
+    <div class="card available" data-tool="inmerge">
+      <div class="card-icon">🔀</div>
+      <div class="card-title">表格内合并</div>
+      <div class="card-desc">把同一个文件里的多个工作表（Sheet）合并成一张总表。字段自动对应，隐藏表也能选。</div>
+      <div class="card-badge ok">可用</div>
+    </div>
     <div class="card coming">
       <div class="card-icon">📑</div>
       <div class="card-title">表格内拆分</div>
@@ -150,6 +156,60 @@
     </div>
     <button id="btn-merge" class="btn-primary">开始合并</button>
     <div id="merge-result" class="result hidden"></div>
+  </section>
+</main>
+
+<!-- ============ 工具：表格内合并 ============ -->
+<main id="view-inmerge" class="container hidden">
+  <div class="crumbs"><a class="back-home">← 返回首页</a><span class="crumb-sep">/</span><b>表格内合并</b></div>
+
+  <div class="err hidden" id="err-inmerge"></div>
+
+  <!-- 第①步：上传文件并勾选工作表 -->
+  <section class="panel">
+    <h3><span class="step-no">1</span> 上传文件，勾选要合并的工作表 <small>（隐藏的工作表也会列出并标注；Word 文件则列出其中的表格）</small></h3>
+    <label class="upload-btn">＋ 选择 xlsx / docx 文件
+      <input type="file" id="file-inmerge" accept=".xlsx,.docx" hidden>
+    </label>
+    <div class="src-detail hidden" id="detail-inmerge">
+      <div class="field-row"><span class="fname" id="fname-inmerge"></span></div>
+      <div id="inmerge-sheets"></div>
+      <p class="hint">第一个勾选的工作表作为基准表，决定总表字段；可点「设为基准」更换。</p>
+    </div>
+  </section>
+
+  <!-- 第②步：字段映射 -->
+  <section class="panel">
+    <h3><span class="step-no">2</span> 总表字段与映射</h3>
+    <div class="field-row">
+      <label>总表字段：</label>
+      <span class="chips" id="inmerge-base-chips"></span>
+    </div>
+    <div class="field-row">
+      <input type="text" id="inmerge-new-field" class="txt" placeholder="新增字段名，如：备注" maxlength="30">
+      <button id="btn-inmerge-addfield" class="btn-ghost">＋ 新增总表字段</button>
+    </div>
+    <div id="inmerge-maps"></div>
+    <p class="hint hidden" id="inmerge-map-hint">请先完成第 ① 步（至少勾选一个工作表）</p>
+  </section>
+
+  <!-- 第③步：选项与生成 -->
+  <section class="panel">
+    <h3><span class="step-no">3</span> 选项与生成</h3>
+    <div class="field-row"><label class="ck"><input type="checkbox" id="inmerge-source-col"> 总表末尾加「来源」列（记录每行来自哪个工作表）</label></div>
+    <div class="field-row"><label class="ck"><input type="checkbox" id="inmerge-dedup-on"> 判重（按下方字段值去重，保留首次出现）</label>
+      <select id="inmerge-dedup-field" class="sel-inline"></select>
+    </div>
+    <div class="field-row">
+      <label>输出格式：</label>
+      <select id="inmerge-outfmt">
+        <option value="">跟随文件格式</option>
+        <option value=".xlsx">Excel（.xlsx）</option>
+        <option value=".docx">Word（.docx）</option>
+      </select>
+    </div>
+    <button id="btn-inmerge" class="btn-primary">开始合并</button>
+    <div id="inmerge-result" class="result hidden"></div>
   </section>
 </main>
 

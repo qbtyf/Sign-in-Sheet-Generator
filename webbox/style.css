@@ -178,3 +178,13 @@ input.txt {
 label.ck { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .btn-ghost.danger:hover { color: var(--warn-text); border-color: var(--warn-text); }
 .result div { margin: 4px 0; }
+
+/* ---- 表格内合并 ---- */
+.inmerge-sheet {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 12px; margin: 6px 0;
+}
+.inmerge-sheet.checked { border-color: #b7e0c3; background: #f2fbf5; }
+.inmerge-sheet.is-base { border-color: var(--brand); background: #f5f9ff; }
+.inmerge-ck { flex: 1; min-width: 180px; }

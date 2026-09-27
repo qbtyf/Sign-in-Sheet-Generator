@@ -8,6 +8,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -40,6 +41,13 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("已生成", dir+"/src.docx")
+	case "-genmulti":
+		dir := os.Args[2]
+		if err := genMulti(dir); err != nil {
+			fmt.Println("生成失败:", err)
+			os.Exit(1)
+		}
+		fmt.Println("已生成", dir+"/multi.xlsx", "和", dir+"/multidoc.docx")
 	case "-verify":
 		path := os.Args[2]
 		if strings.HasSuffix(strings.ToLower(path), ".xlsx") {
@@ -233,6 +241,152 @@ func genSrcDocx(path string) error {
 		if _, err := fw.Write([]byte(e.body)); err != nil {
 			return err
 		}
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return os.WriteFile(path, buf.Bytes(), 0o644)
+}
+
+// genMulti 生成「表格内合并」测试夹具：
+// multi.xlsx = 3 张工作表（Sheet1 三行数据、二班 两行数据且隐藏、空表），表头同构
+// multidoc.docx = 一个文档里两个表格（表头同构，各两行数据）
+func genMulti(dir string) error {
+	f := excelize.NewFile()
+	mk := func(sheet string, rows [][]any) error {
+		if _, err := f.NewSheet(sheet); err != nil {
+			return err
+		}
+		for i, r := range rows {
+			cell, _ := excelize.CoordinatesToCellName(1, i+1)
+			if err := f.SetSheetRow(sheet, cell, &r); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := mk("一班", [][]any{
+		{"姓名", "工号", "班组", "部门", "工种"},
+		{"张三", "A001", "一班", "生产部", "焊工"},
+		{"李四", "A002", "一班", "生产部", "电工"},
+		{"王五", "A003", "一班", "设备部", "钳工"},
+	}); err != nil {
+		return err
+	}
+	if err := mk("二班", [][]any{
+		{"姓名", "工号", "班组", "部门", "工种"},
+		{"赵六", "A004", "二班", "设备部", "焊工"},
+		{"钱七", "A005", "二班", "生产部", "电工"},
+	}); err != nil {
+		return err
+	}
+	if err := mk("空表", [][]any{{"姓名", "工号", "班组", "部门", "工种"}}); err != nil {
+		return err
+	}
+	f.DeleteSheet("Sheet1")
+	if err := f.SaveAs(dir + "/multi.xlsx"); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := hideSheetInFile(dir+"/multi.xlsx", "二班"); err != nil {
+		return err
+	}
+
+	// multidoc.docx：两个同构表格
+	tbl := func(rows ...[]string) string {
+		s := "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"3000\"/><w:gridCol w:w=\"3000\"/><w:gridCol w:w=\"3000\"/></w:tblGrid>"
+		for _, r := range rows {
+			s += "<w:tr>"
+			for _, c := range r {
+				s += "<w:tc><w:p><w:r><w:t>" + c + "</w:t></w:r></w:p></w:tc>"
+			}
+			s += "</w:tr>"
+		}
+		return s + "</w:tbl>"
+	}
+	docXML := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
+		tbl([]string{"姓名", "工号", "班组"}, []string{"周九", "B001", "一班"}, []string{"吴十", "B002", "二班"}) +
+		tbl([]string{"姓名", "工号", "班组"}, []string{"郑一", "B003", "三班"}, []string{"王二", "B004", "一班"}) +
+		`<w:sectPr/></w:body></w:document>`
+
+	ct := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+		`<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+		`<Default Extension="xml" ContentType="application/xml"/>` +
+		`<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>` +
+		`</Types>`
+	rels := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+		`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>` +
+		`</Relationships>`
+
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for _, e := range []struct{ name, body string }{
+		{"[Content_Types].xml", ct},
+		{"_rels/.rels", rels},
+		{"word/document.xml", docXML},
+	} {
+		fw, err := w.Create(e.name)
+		if err != nil {
+			return err
+		}
+		if _, err := fw.Write([]byte(e.body)); err != nil {
+			return err
+		}
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return os.WriteFile(dir+"/multidoc.docx", buf.Bytes(), 0o644)
+}
+
+// hideSheetInFile 把 xlsx 内指定工作表标为 hidden（excelize v2.8.1 无此 API，直接改 workbook.xml）
+func hideSheetInFile(path, sheet string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for _, f := range r.File {
+		fw, err := w.Create(f.Name)
+		if err != nil {
+			return err
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		if f.Name == "xl/workbook.xml" {
+			var sb strings.Builder
+			tmp := make([]byte, 4096)
+			for {
+				n, e := rc.Read(tmp)
+				sb.Write(tmp[:n])
+				if e != nil {
+					break
+				}
+			}
+			xml := sb.String()
+			xml = strings.Replace(xml,
+				`<sheet name="`+sheet+`"`,
+				`<sheet name="`+sheet+`" state="hidden"`, 1)
+			_, _ = fw.Write([]byte(xml))
+		} else {
+			if _, err := io.Copy(fw, rc); err != nil {
+				rc.Close()
+				return err
+			}
+		}
+		rc.Close()
 	}
 	if err := w.Close(); err != nil {
 		return err
