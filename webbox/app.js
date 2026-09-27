@@ -14,7 +14,7 @@ $('brand-home').addEventListener('click', showHome);
 document.querySelectorAll('.back-home').forEach((a) => a.addEventListener('click', showHome));
 
 function showView(name) {
-  ['home', 'fill', 'merge', 'split', 'inmerge'].forEach((v) => $('view-' + v).classList.add('hidden'));
+  ['home', 'fill', 'merge', 'split', 'inmerge', 'extract'].forEach((v) => $('view-' + v).classList.add('hidden'));
   $('view-' + name).classList.remove('hidden');
   clearErr();
 }
@@ -268,7 +268,8 @@ $('btn-fill').addEventListener('click', async () => {
     });
     const box = $('fill-result');
     box.innerHTML = '<div class="ok-line">✅ 生成完成：共填充 ' + data.rows + ' 行数据</div>'
-      + '<a href="/api/download?name=' + encodeURIComponent(data.file) + '" download>下载 ' + escapeHtml(data.file) + '</a>';
+      + '<div style="margin-top:8px"><a href="/api/download?name=' + encodeURIComponent(data.file) + '" download>📥 下载 ' + escapeHtml(data.file) + '</a> '
+      + saveAsBtnHTML(data.file) + '</div>';
     box.classList.remove('hidden');
   } catch (err) {
     showErr(err.message);
@@ -567,7 +568,8 @@ $('btn-merge').addEventListener('click', async () => {
     });
     const box = $('merge-result');
     box.innerHTML = '<div class="ok-line">✅ 合并完成：' + M.files.length + ' 个来源，共 ' + data.rows + ' 行数据</div>'
-      + '<a href="/api/download?name=' + encodeURIComponent(data.file) + '" download>下载 ' + escapeHtml(data.file) + '</a>';
+      + '<div style="margin-top:8px"><a href="/api/download?name=' + encodeURIComponent(data.file) + '" download>📥 下载 ' + escapeHtml(data.file) + '</a> '
+      + saveAsBtnHTML(data.file) + '</div>';
     box.classList.remove('hidden');
   } catch (err) {
     showErr(err.message);
@@ -715,14 +717,17 @@ $('btn-split').addEventListener('click', async () => {
       data.sheets.forEach((s) => {
         html += '<div><span class="chip">' + escapeHtml(s.name) + '</span> <span class="muted">（' + s.rows + ' 行）</span></div>';
       });
-      html += '<div style="margin-top:8px"><a class="btn-ghost" href="/api/download?name=' + encodeURIComponent(data.file) + '" download>📥 下载 ' + escapeHtml(data.file) + '</a></div>';
+      html += '<div style="margin-top:8px"><a class="btn-ghost" href="/api/download?name=' + encodeURIComponent(data.file) + '" download>📥 下载 ' + escapeHtml(data.file) + '</a> '
+        + saveAsBtnHTML(data.file) + '</div>';
       box.innerHTML = html;
     } else {
       let html = '<div class="ok-line">✅ 拆分完成：共 ' + data.files.length + ' 份</div>';
       data.files.forEach((f) => {
-        html += '<div><a href="/api/download?name=' + encodeURIComponent(f.file) + '" download>' + escapeHtml(f.file) + '</a> <span class="muted">（' + f.rows + ' 行）</span></div>';
+        html += '<div><a href="/api/download?name=' + encodeURIComponent(f.file) + '" download>' + escapeHtml(f.file) + '</a> <span class="muted">（' + f.rows + ' 行）</span> '
+          + saveAsBtnHTML(f.file) + '</div>';
       });
-      html += '<div style="margin-top:8px"><a id="btn-zip" class="btn-ghost" href="#">📦 打包下载全部（zip）</a></div>';
+      html += '<div style="margin-top:8px"><a id="btn-zip" class="btn-ghost" href="#">📦 打包下载全部（zip）</a> '
+        + saveAllBtnHTML(data.files.map((f) => f.file)) + '</div>';
       box.innerHTML = html;
       const zipBtn = $('btn-zip');
       const names = data.files.map((f) => f.file).join(',');
@@ -1033,12 +1038,206 @@ $('btn-inmerge').addEventListener('click', async () => {
     const where = data.sheetName ? '新增工作表「' + escapeHtml(data.sheetName) + '」' : '文末追加「合并总表」表格';
     box.innerHTML = '<div class="ok-line">✅ 合并完成：' + srcs.length + ' 个来源，共 ' + data.rows + ' 行数据，结果已写回原文件</div>'
       + '<div class="muted">在原文件里' + where + '，原有内容全部保留</div>'
-      + '<div style="margin-top:8px"><a href="/api/download?name=' + encodeURIComponent(data.file) + '" download>📥 下载 ' + escapeHtml(data.file) + '</a></div>';
+      + '<div style="margin-top:8px"><a href="/api/download?name=' + encodeURIComponent(data.file) + '" download>📥 下载 ' + escapeHtml(data.file) + '</a> '
+      + saveAsBtnHTML(data.file) + '</div>';
     box.classList.remove('hidden');
   } catch (err) {
     showErr(err.message);
   } finally {
     btn.disabled = false;
     btn.textContent = '开始合并';
+  }
+});
+
+// ===========================================================================
+// 输出目录与「另存到…」（V1.4：所有产物可选择保存位置）
+// ===========================================================================
+
+let OUTDIR = localStorage.getItem('tt-outdir') || '';
+
+function renderOutdir() {
+  const el = $('outdir-label');
+  if (!el) return;
+  el.textContent = OUTDIR ? OUTDIR : '未设置';
+  el.title = OUTDIR || '';
+}
+renderOutdir();
+
+$('btn-pickdir').addEventListener('click', async () => {
+  clearErr();
+  try {
+    const data = await api('/api/pickdir', { method: 'POST' });
+    if (data.cancelled || !data.dir) return;
+    OUTDIR = data.dir;
+    localStorage.setItem('tt-outdir', OUTDIR);
+    renderOutdir();
+  } catch (err) {
+    showErr(err.message);
+  }
+});
+
+// 结果区按钮（事件委托）：💾 另存到… / 📁 全部保存到输出目录
+document.addEventListener('click', async (e) => {
+  const saveBtn = e.target.closest('.btn-saveas');
+  if (saveBtn) {
+    e.preventDefault();
+    const file = saveBtn.dataset.file;
+    const old = saveBtn.textContent;
+    saveBtn.disabled = true;
+    saveBtn.textContent = '等待选择位置…';
+    try {
+      const data = await api('/api/saveas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file }),
+      });
+      if (data.cancelled) {
+        saveBtn.textContent = old;
+        saveBtn.disabled = false;
+        return;
+      }
+      saveBtn.textContent = '✅ 已保存';
+      saveBtn.title = data.savedTo;
+    } catch (err) {
+      saveBtn.textContent = old;
+      saveBtn.disabled = false;
+      showErr(err.message);
+    }
+    return;
+  }
+  const allBtn = e.target.closest('.btn-saveall');
+  if (allBtn) {
+    e.preventDefault();
+    const files = allBtn.dataset.files ? allBtn.dataset.files.split('|') : [];
+    if (!files.length) return;
+    let dir = OUTDIR;
+    try {
+      if (!dir) {
+        const d = await api('/api/pickdir', { method: 'POST' });
+        if (!d.dir) return;
+        dir = d.dir;
+        OUTDIR = dir;
+        localStorage.setItem('tt-outdir', dir);
+        renderOutdir();
+      }
+      const old = allBtn.textContent;
+      allBtn.disabled = true;
+      allBtn.textContent = '正在保存…';
+      const data = await api('/api/saveall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files, dir }),
+      });
+      allBtn.textContent = '✅ 已保存 ' + data.saved.length + ' 个文件';
+      allBtn.title = dir;
+    } catch (err) {
+      allBtn.disabled = false;
+      allBtn.textContent = '📁 全部保存到输出目录';
+      showErr(err.message);
+    }
+  }
+});
+
+// 生成按钮 HTML（各工具结果区共用）
+function saveAsBtnHTML(file) {
+  return '<button class="btn-ghost btn-saveas" data-file="' + escapeHtml(file) + '" title="弹出系统另存为对话框，选择保存位置">💾 另存到…</button>';
+}
+function saveAllBtnHTML(files) {
+  return '<button class="btn-ghost btn-saveall" data-files="' + escapeHtml(files.join('|')) + '" title="把全部产物保存到顶栏设置的输出目录">📁 全部保存到输出目录</button>';
+}
+
+// ===========================================================================
+// 工具五：提取表格（V1.4：Word → Word 原样 / Excel）
+// ===========================================================================
+
+const EX = { path: '', name: '', tables: [], checked: {} };
+
+$('file-extract').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  clearErr();
+  $('extract-result').classList.add('hidden');
+  try {
+    const fd = new FormData();
+    fd.append('file', f);
+    fd.append('kind', 'src');
+    const data = await api('/api/upload', { method: 'POST', body: fd });
+    EX.path = data.path;
+    EX.name = data.name;
+    const ld = await api('/api/extract/list', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: EX.path }),
+    });
+    EX.tables = ld.tables;
+    EX.checked = {};
+    ld.tables.forEach((t) => { EX.checked[t.idx] = t.rows > 0; });
+    $('fname-extract').textContent = data.name;
+    $('detail-extract').classList.remove('hidden');
+    renderExtractTables();
+    $('btn-extract').disabled = false;
+  } catch (err) {
+    showErr(err.message);
+  }
+});
+
+function renderExtractTables() {
+  const box = $('extract-tables');
+  box.innerHTML = '';
+  EX.tables.forEach((t) => {
+    const row = document.createElement('div');
+    row.className = 'inmerge-sheet' + (EX.checked[t.idx] ? ' checked' : '');
+    const ck = document.createElement('label');
+    ck.className = 'ck inmerge-ck';
+    const box1 = document.createElement('input');
+    box1.type = 'checkbox';
+    box1.checked = !!EX.checked[t.idx];
+    box1.addEventListener('change', () => {
+      EX.checked[t.idx] = box1.checked;
+      renderExtractTables();
+    });
+    ck.appendChild(box1);
+    const txt = document.createElement('span');
+    txt.textContent = '表格 ' + (t.idx + 1) + '（' + t.rows + ' 行 × ' + t.cols + ' 列）';
+    ck.appendChild(txt);
+    row.appendChild(ck);
+    if (t.preview && t.preview.length) {
+      const pv = document.createElement('div');
+      pv.className = 'muted extract-preview';
+      pv.textContent = t.preview.join('　|　');
+      pv.title = pv.textContent;
+      row.appendChild(pv);
+    }
+    box.appendChild(row);
+  });
+}
+
+$('btn-extract').addEventListener('click', async () => {
+  clearErr();
+  $('extract-result').classList.add('hidden');
+  const idxs = EX.tables.filter((t) => EX.checked[t.idx]).map((t) => t.idx);
+  if (!idxs.length) { showErr('请至少勾选一个要提取的表格'); return; }
+  const fmt = document.querySelector('input[name="extract-fmt"]:checked').value;
+
+  const btn = $('btn-extract');
+  btn.disabled = true;
+  btn.textContent = '正在提取…';
+  try {
+    const data = await api('/api/extract', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: EX.path, tables: idxs, outFmt: fmt }),
+    });
+    const box = $('extract-result');
+    box.innerHTML = '<div class="ok-line">✅ 提取完成：' + data.tables + ' 个表格</div>'
+      + '<div style="margin-top:8px"><a class="btn-ghost" href="/api/download?name=' + encodeURIComponent(data.file) + '" download>📥 下载 ' + escapeHtml(data.file) + '</a> '
+      + saveAsBtnHTML(data.file) + '</div>';
+    box.classList.remove('hidden');
+  } catch (err) {
+    showErr(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '开始提取';
   }
 });

@@ -48,6 +48,13 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("已生成", dir+"/multi.xlsx", "和", dir+"/multidoc.docx")
+	case "-genext":
+		dir := os.Args[2]
+		if err := genExtDocx(dir + "/ext.docx"); err != nil {
+			fmt.Println("生成失败:", err)
+			os.Exit(1)
+		}
+		fmt.Println("已生成", dir+"/ext.docx")
 	case "-verify":
 		path := os.Args[2]
 		if strings.HasSuffix(strings.ToLower(path), ".xlsx") {
@@ -466,4 +473,113 @@ func verifyDocx(path string) {
 			fmt.Println("  " + strings.Join(cells, " | "))
 		}
 	}
+}
+
+// genExtDocx 生成「提取表格」测试夹具 ext.docx：
+// 表格0 = 4 列网格：表头带底纹加粗；第 2 行横向合并（gridSpan=2）；
+//        第 3-4 行「部门」纵向合并（vMerge restart/continue）；全表单线边框
+// 表格1 = 普通 3 列 × 3 行
+func genExtDocx(path string) error {
+	shd := `<w:shd w:val="clear" w:color="auto" w:fill="D9E2F3"/>`
+	border := `<w:tblBorders>` +
+		`<w:top w:val="single" w:sz="4"/>` +
+		`<w:left w:val="single" w:sz="4"/>` +
+		`<w:bottom w:val="single" w:sz="4"/>` +
+		`<w:right w:val="single" w:sz="4"/>` +
+		`<w:insideH w:val="single" w:sz="4"/>` +
+		`<w:insideV w:val="single" w:sz="4"/>` +
+		`</w:tblBorders>`
+
+	tc := func(text, extraPr, rPr string) string {
+		run := ""
+		if text != "" {
+			run = "<w:r>" + rPr + "<w:t xml:space=\"preserve\">" + text + "</w:t></w:r>"
+		}
+		return "<w:tc><w:tcPr>" + extraPr + "</w:tcPr><w:p>" + run + "</w:p></w:tc>"
+	}
+
+	tbl0 := "<w:tbl><w:tblPr>" + border + "</w:tblPr>" +
+		`<w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid>` +
+		// 表头：底纹 + 加粗
+		"<w:tr>" +
+		tc("姓名", `<w:tcW w:w="3000"/>`+shd, "<w:rPr><w:b/></w:rPr>") +
+		tc("工号", `<w:tcW w:w="3000"/>`+shd, "<w:rPr><w:b/></w:rPr>") +
+		tc("班组", `<w:tcW w:w="3000"/>`+shd, "<w:rPr><w:b/></w:rPr>") +
+		tc("部门", `<w:tcW w:w="3000"/>`+shd, "<w:rPr><w:b/></w:rPr>") +
+		"</w:tr>" +
+		// 第 2 行：班组+部门 横向合并（gridSpan=2）
+		"<w:tr>" +
+		tc("张三", `<w:tcW w:w="3000"/>`, "") +
+		tc("A001", `<w:tcW w:w="3000"/>`, "") +
+		tc("二班·生产一部", `<w:tcW w:w="6000"/><w:gridSpan w:val="2"/>`, "") +
+		"</w:tr>" +
+		// 第 3 行：部门 纵向合并开始（restart）
+		"<w:tr>" +
+		tc("李四", `<w:tcW w:w="3000"/>`, "") +
+		tc("A002", `<w:tcW w:w="3000"/>`, "") +
+		tc("二班", `<w:tcW w:w="3000"/>`, "") +
+		tc("生产部", `<w:tcW w:w="3000"/><w:vMerge w:val="restart"/>`, "") +
+		"</w:tr>" +
+		// 第 4 行：部门 纵向合并延续（vMerge 空标记）
+		"<w:tr>" +
+		tc("王五", `<w:tcW w:w="3000"/>`, "") +
+		tc("A003", `<w:tcW w:w="3000"/>`, "") +
+		tc("二班", `<w:tcW w:w="3000"/>`, "") +
+		tc("", `<w:tcW w:w="3000"/><w:vMerge/>`, "") +
+		"</w:tr>" +
+		"</w:tbl>"
+
+	tbl1 := "<w:tbl><w:tblPr>" + border + "</w:tblPr>" +
+		`<w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid>` +
+		"<w:tr>" +
+		tc("物料", `<w:tcW w:w="3000"/>`, "") +
+		tc("数量", `<w:tcW w:w="3000"/>`, "") +
+		tc("单价", `<w:tcW w:w="3000"/>`, "") +
+		"</w:tr>" +
+		"<w:tr>" +
+		tc("13800138000", `<w:tcW w:w="3000"/>`, "") +
+		tc("100", `<w:tcW w:w="3000"/>`, "") +
+		tc("0.5", `<w:tcW w:w="3000"/>`, "") +
+		"</w:tr>" +
+		"<w:tr>" +
+		tc("螺母", `<w:tcW w:w="3000"/>`, "") +
+		tc("80", `<w:tcW w:w="3000"/>`, "") +
+		tc("0.3", `<w:tcW w:w="3000"/>`, "") +
+		"</w:tr>" +
+		"</w:tbl>"
+
+	docXML := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
+		tbl0 + "<w:p/>" + tbl1 + "<w:p/><w:sectPr/></w:body></w:document>"
+
+	ct := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+		`<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+		`<Default Extension="xml" ContentType="application/xml"/>` +
+		`<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>` +
+		`</Types>`
+	rels := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+		`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>` +
+		`</Relationships>`
+
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for _, e := range []struct{ name, body string }{
+		{"[Content_Types].xml", ct},
+		{"_rels/.rels", rels},
+		{"word/document.xml", docXML},
+	} {
+		fw, err := w.Create(e.name)
+		if err != nil {
+			return err
+		}
+		if _, err := io.WriteString(fw, e.body); err != nil {
+			return err
+		}
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return os.WriteFile(path, buf.Bytes(), 0o644)
 }

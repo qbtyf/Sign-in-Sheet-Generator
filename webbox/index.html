@@ -9,6 +9,10 @@
 <body data-app-mode="__APP_MODE__">
 <header class="topbar">
   <div class="brand" id="brand-home">🧰 表格工具箱</div>
+  <div class="outdir" id="outdir" title="设置后可用「全部保存到输出目录」一键保存产物">
+    <span class="muted">输出目录：</span><span class="muted" id="outdir-label">未设置</span>
+    <button id="btn-pickdir" class="btn-ghost">选择…</button>
+  </div>
   <button id="btn-exit" class="btn-ghost hidden">退出程序</button>
 </header>
 
@@ -38,6 +42,12 @@
       <div class="card-icon">🔀</div>
       <div class="card-title">表格内合并</div>
       <div class="card-desc">把同一个文件里的多个工作表（Sheet）合并成一张总表，结果写回原文件。隐藏表也能选。</div>
+      <div class="card-badge ok">可用</div>
+    </div>
+    <div class="card available" data-tool="extract">
+      <div class="card-icon">📤</div>
+      <div class="card-title">提取表格</div>
+      <div class="card-desc">从 Word 文档里提取表格：导出 Word 可 100% 保留原格式，导出 Excel 保留合并格与列宽。PDF 提取将在 V1.5 提供。</div>
       <div class="card-badge ok">可用</div>
     </div>
   </div>
@@ -255,6 +265,40 @@
     </div>
     <button id="btn-split" class="btn-primary" disabled>开始拆分</button>
     <div id="split-result" class="result hidden"></div>
+  </section>
+</main>
+
+<!-- ============ 工具：提取表格 ============ -->
+<main id="view-extract" class="container hidden">
+  <div class="crumbs"><a class="back-home">← 返回首页</a><span class="crumb-sep">/</span><b>提取表格</b></div>
+
+  <div class="err hidden" id="err-extract"></div>
+
+  <!-- 第①步：上传 Word 文档 -->
+  <section class="panel">
+    <h3><span class="step-no">1</span> 上传 Word 文档 <small>（列出其中的全部表格，勾选要提取的；PDF 提取将在 V1.5 提供）</small></h3>
+    <label class="upload-btn">＋ 选择 docx 文件
+      <input type="file" id="file-extract" accept=".docx" hidden>
+    </label>
+    <div class="src-detail hidden" id="detail-extract">
+      <div class="field-row"><span class="fname" id="fname-extract"></span></div>
+      <div id="extract-tables"></div>
+    </div>
+  </section>
+
+  <!-- 第②步：输出格式 -->
+  <section class="panel">
+    <h3><span class="step-no">2</span> 输出格式</h3>
+    <div class="field-row">
+      <label class="ck"><input type="radio" name="extract-fmt" value=".docx" checked> Word（.docx）</label>
+      <span class="hint">勾选的表格原样搬运到新 Word 文档，格式 100% 保留</span>
+    </div>
+    <div class="field-row">
+      <label class="ck"><input type="radio" name="extract-fmt" value=".xlsx"> Excel（.xlsx）</label>
+      <span class="hint">每个表格一个工作表，保留合并格、列宽、底纹；长数字不丢格式</span>
+    </div>
+    <button id="btn-extract" class="btn-primary" disabled>开始提取</button>
+    <div id="extract-result" class="result hidden"></div>
   </section>
 </main>
 

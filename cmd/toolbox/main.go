@@ -25,6 +25,7 @@ import (
 
 	"signsheet/internal/roster"
 	"signsheet/internal/tabfill"
+	"signsheet/internal/windialog"
 	"signsheet/webbox"
 )
 
@@ -160,6 +161,11 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/fill", handleFill)
 	mux.HandleFunc("POST /api/merge", handleMerge)
 	mux.HandleFunc("POST /api/split", handleSplit)
+	mux.HandleFunc("POST /api/extract/list", handleExtractList)
+	mux.HandleFunc("POST /api/extract", handleExtract)
+	mux.HandleFunc("POST /api/saveas", handleSaveAs)
+	mux.HandleFunc("POST /api/saveall", handleSaveAll)
+	mux.HandleFunc("POST /api/pickdir", handlePickDir)
 	mux.HandleFunc("GET /api/zip", handleZip)
 	mux.HandleFunc("GET /api/download", handleDownload)
 }
@@ -621,6 +627,250 @@ func handleSplit(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("拆分完成: %s → %d 份（%s）", stem, len(files), req.Mode)
 	writeJSON(w, map[string]any{"files": files, "base": stem})
+}
+
+// ---------------------------------------------------------------------------
+// 提取表格（V1.4）
+// ---------------------------------------------------------------------------
+
+// extractListRequest /api/extract/list 请求体
+type extractListRequest struct {
+	Path string `json:"path"`
+}
+
+// handleExtractList 列出 docx 里的全部表格（提取表格第①步）
+func handleExtractList(w http.ResponseWriter, r *http.Request) {
+	var req extractListRequest
+	if err := readBody(r, &req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	path, _, err := resolve(req.Path, "docx:0")
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if !strings.EqualFold(filepath.Ext(path), ".docx") {
+		writeErr(w, 400, "提取表格目前支持 Word（.docx）文件；PDF 提取将在 V1.5 提供")
+		return
+	}
+	tables, err := tabfill.ListDocxTables(path)
+	if err != nil {
+		log.Printf("提取表格清单失败: %v", err)
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"tables": tables})
+}
+
+// extractRequest /api/extract 请求体
+type extractRequest struct {
+	Path   string `json:"path"`
+	Tables []int  `json:"tables"` // 勾选的表格序号（0 基）
+	OutFmt string `json:"outFmt"` // ".docx" / ".xlsx"
+}
+
+// handleExtract 执行提取，输出到 输出/ 目录，返回 {file, tables}
+func handleExtract(w http.ResponseWriter, r *http.Request) {
+	var req extractRequest
+	if err := readBody(r, &req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if len(req.Tables) == 0 {
+		writeErr(w, 400, "请至少勾选一个要提取的表格")
+		return
+	}
+	if req.OutFmt != ".docx" && req.OutFmt != ".xlsx" {
+		req.OutFmt = ".docx"
+	}
+	path, _, err := resolve(req.Path, "docx:0")
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if !strings.EqualFold(filepath.Ext(path), ".docx") {
+		writeErr(w, 400, "提取表格目前支持 Word（.docx）文件；PDF 提取将在 V1.5 提供")
+		return
+	}
+
+	outName := tabfill.SanitizeFileName(userStem(req.Path)) + "-提取" + req.OutFmt
+	outPath := filepath.Join(workDir, outSub, outName)
+	if _, err := os.Stat(outPath); err == nil { // 输出目录重名则加时间戳
+		outName = fmt.Sprintf("%s-%s%s", strings.TrimSuffix(outName, req.OutFmt), time.Now().Format("150405"), req.OutFmt)
+		outPath = filepath.Join(workDir, outSub, outName)
+	}
+	if err := tabfill.ExtractDocx(path, outPath, req.OutFmt, req.Tables); err != nil {
+		log.Printf("提取失败: %v", err)
+		writeErr(w, 400, err.Error())
+		return
+	}
+	log.Printf("提取完成: %s（%d 个表格 → %s）", outName, len(req.Tables), req.OutFmt)
+	writeJSON(w, map[string]any{"file": outName, "tables": len(req.Tables)})
+}
+
+// ---------------------------------------------------------------------------
+// 保存路径（V1.4）：另存到… / 输出目录
+// ---------------------------------------------------------------------------
+
+// saveAsRequest /api/saveas 请求体
+type saveAsRequest struct {
+	File string `json:"file"` // 输出目录里的文件名（裸文件名）
+	Dir  string `json:"dir"`  // 可选：直接存到该目录（不弹对话框）
+}
+
+// handleSaveAs 把输出文件保存到用户选择的位置。
+// Dir 为空时弹 Windows 原生"另存为"对话框（预填文件名）；用户取消返回 {cancelled:true}。
+func handleSaveAs(w http.ResponseWriter, r *http.Request) {
+	var req saveAsRequest
+	if err := readBody(r, &req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	name := filepath.Base(req.File)
+	src := filepath.Join(workDir, outSub, name)
+	if _, err := os.Stat(src); err != nil {
+		writeErr(w, 404, "文件不存在或已过期，请重新生成")
+		return
+	}
+
+	var dst string
+	if req.Dir != "" {
+		info, err := os.Stat(req.Dir)
+		if err != nil || !info.IsDir() {
+			writeErr(w, 400, "保存目录无效: "+req.Dir)
+			return
+		}
+		dst = uniqueDst(filepath.Join(req.Dir, name))
+	} else {
+		dst = windialog.SaveFile("另存为", name, filterForFile(name))
+		if dst == "" {
+			writeJSON(w, map[string]any{"cancelled": true})
+			return
+		}
+	}
+	if err := copyFile(src, dst); err != nil {
+		log.Printf("另存失败: %v", err)
+		writeErr(w, 500, "保存失败: "+err.Error())
+		return
+	}
+	log.Printf("已保存: %s → %s", name, dst)
+	writeJSON(w, map[string]any{"savedTo": dst})
+}
+
+// saveAllRequest /api/saveall 请求体
+type saveAllRequest struct {
+	Files []string `json:"files"` // 输出目录里的文件名列表
+	Dir   string   `json:"dir"`   // 目标目录
+}
+
+// handleSaveAll 把多个输出文件一次性保存到指定目录（重名自动改名）
+func handleSaveAll(w http.ResponseWriter, r *http.Request) {
+	var req saveAllRequest
+	if err := readBody(r, &req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if info, err := os.Stat(req.Dir); err != nil || !info.IsDir() {
+		// 目录不存在时尝试自动创建（正常路径来自系统"选择文件夹"对话框，必存在）
+		if mkErr := os.MkdirAll(req.Dir, 0o755); mkErr != nil {
+			writeErr(w, 400, "输出目录无效，请先选择")
+			return
+		}
+	}
+	type savedItem struct {
+		File string `json:"file"`
+		To   string `json:"to"`
+	}
+	saved := make([]savedItem, 0, len(req.Files))
+	for _, f := range req.Files {
+		name := filepath.Base(f)
+		src := filepath.Join(workDir, outSub, name)
+		data, err := os.ReadFile(src)
+		if err != nil {
+			continue // 单个缺失不阻断
+		}
+		dst := uniqueDst(filepath.Join(req.Dir, name))
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			continue
+		}
+		saved = append(saved, savedItem{File: name, To: dst})
+	}
+	if len(saved) == 0 {
+		writeErr(w, 400, "没有可保存的文件")
+		return
+	}
+	log.Printf("批量保存: %d 个文件 → %s", len(saved), req.Dir)
+	writeJSON(w, map[string]any{"saved": saved})
+}
+
+// handlePickDir 弹出 Windows 原生"选择文件夹"对话框
+func handlePickDir(w http.ResponseWriter, r *http.Request) {
+	dir := windialog.PickFolder("选择输出目录")
+	if dir == "" {
+		writeJSON(w, map[string]any{"cancelled": true})
+		return
+	}
+	writeJSON(w, map[string]any{"dir": dir})
+}
+
+// ---------------------------------------------------------------------------
+// 保存路径公共小件
+// ---------------------------------------------------------------------------
+
+// userStem 去掉上传时加的 "src-<纳秒>-" 前缀和扩展名，得到用户可读的文件主干
+func userStem(path string) string {
+	stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if parts := strings.SplitN(stem, "-", 3); len(parts) == 3 {
+		stem = parts[2]
+	}
+	return stem
+}
+
+// uniqueDst 目标已存在时自动加序号，绝不覆盖用户已有文件
+func uniqueDst(dst string) string {
+	if _, err := os.Stat(dst); err != nil {
+		return dst
+	}
+	ext := filepath.Ext(dst)
+	base := strings.TrimSuffix(dst, ext)
+	for i := 2; ; i++ {
+		cand := fmt.Sprintf("%s(%d)%s", base, i, ext)
+		if _, err := os.Stat(cand); err != nil {
+			return cand
+		}
+	}
+}
+
+// filterForFile 按扩展名生成另存为对话框的过滤器（| 分隔，windialog 内转换）
+func filterForFile(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".docx":
+		return "Word 文档|*.docx|所有文件|*.*"
+	case ".xlsx":
+		return "Excel 工作簿|*.xlsx|所有文件|*.*"
+	case ".zip":
+		return "压缩文件|*.zip|所有文件|*.*"
+	}
+	return "所有文件|*.*"
+}
+
+// copyFile 复制文件（覆盖前由调用方保证 uniqueDst / 对话框确认）
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }
 
 // handleZip 把指定的输出文件打包成一个 zip 供下载
