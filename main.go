@@ -30,6 +30,11 @@ var builtinFS embed.FS
 // curWebView 保存当前窗口引用，供退出接口优雅销毁（避免 crashpad 报 CrashSender 错误）
 var curWebView webview2.WebView
 
+// appMode 当前运行模式：webview=内嵌窗口（关窗口即退出，页面隐藏退出按钮）；
+// browser=浏览器回退/无头测试（关标签页不结束进程，页面显示退出按钮）。
+// 通过 index.html 中的 __APP_MODE__ 占位符注入前端
+var appMode = "browser"
+
 func main() {
 	webSub, err := fs.Sub(webFS, "web")
 	if err != nil {
@@ -38,7 +43,7 @@ func main() {
 	server.SetBuiltinFS(builtinFS)
 
 	mux := http.NewServeMux()
-	mux.Handle("GET /", http.FileServer(http.FS(webSub)))
+	mux.Handle("GET /", staticHandler(webSub))
 	server.Register(mux)
 	// 退出接口：浏览器回退模式下网页右上角「退出程序」是关闭入口；
 	// WebView 模式下直接关窗口即可。两种模式都先销毁窗口再退出，避免崩溃报告弹窗
@@ -66,6 +71,7 @@ func main() {
 	// 首选：内嵌 WebView2 窗口（关窗口即退出，无需另开浏览器）
 	if w, ok := newWebViewSafe(); ok {
 		curWebView = w
+		appMode = "webview"
 		defer w.Destroy()
 		w.SetTitle("通用签到表生成器")
 		w.SetSize(1180, 800, webview2.HintNone)
@@ -89,6 +95,23 @@ func main() {
 	if err := http.Serve(ln, mux); err != nil {
 		panic(err)
 	}
+}
+
+// staticHandler 服务内嵌网页；index.html 单独处理，把 __APP_MODE__ 占位符
+// 替换为当前运行模式（webview/browser），前端据此决定「退出程序」按钮是否显示
+func staticHandler(webSub fs.FS) http.Handler {
+	fileServer := http.FileServer(http.FS(webSub))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+			if data, err := fs.ReadFile(webSub, "index.html"); err == nil {
+				html := strings.ReplaceAll(string(data), "__APP_MODE__", appMode)
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, _ = w.Write([]byte(html))
+				return
+			}
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
 // gracefulExit 先销毁窗口再结束进程：直接 os.Exit 会绕过 WebView2 清理，

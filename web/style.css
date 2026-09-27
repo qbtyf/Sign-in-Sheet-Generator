@@ -11,10 +11,29 @@ body {
 }
 .brand { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .exit-link {
-  margin-left: auto; font-size: 12px; color: #94a3b8; text-decoration: none;
+  font-size: 12px; color: #94a3b8; text-decoration: none;
   border: 1px solid #e2e8f0; border-radius: 6px; padding: 4px 10px; white-space: nowrap;
 }
 .exit-link:hover { color: #b91c1c; border-color: #b91c1c; }
+.top-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+#lang-select { font-size: 12px; padding: 4px 6px; border-radius: 6px; max-width: 120px; }
+
+/* V2.0: 阿拉伯语等 RTL 语言整体镜像 */
+html[dir="rtl"] .topbar { flex-direction: row-reverse; }
+html[dir="rtl"] .steps { flex-direction: row-reverse; }
+html[dir="rtl"] .card-row,
+html[dir="rtl"] .tabs,
+html[dir="rtl"] .actions,
+html[dir="rtl"] .form-row,
+html[dir="rtl"] .design-row.v2,
+html[dir="rtl"] .fill-dynamic,
+html[dir="rtl"] .dup-item,
+html[dir="rtl"] .out-row,
+html[dir="rtl"] .pv-head-bar,
+html[dir="rtl"] .input-cols { direction: rtl; }
+html[dir="rtl"] .modal-actions { direction: rtl; }
+html[dir="rtl"] .form-row { grid-template-columns: 1fr 150px; }
+html[dir="rtl"] body { font-family: "Segoe UI", "Tahoma", sans-serif; }
 .logo {
   background: #185fa5; color: #fff; border-radius: 6px;
   width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; font-size: 15px;

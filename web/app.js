@@ -1,7 +1,65 @@
-/* 通用签到表生成器 V2 - 八步向导逻辑 */
+/* 通用签到表生成器 V2.0 - 八步向导逻辑 + 多语种支持 */
 "use strict";
 
-const STEP_LABEL = { input: "① 输入", dedup: "② 判重", fields: "③ 名单字段", mapping: "④ 对应关系", fill: "⑤ 填写", preview: "⑥ 预览", output: "⑦ 输出", catout: "⑧ 分类输出" };
+/* ---------------------------------------------------------------- i18n 多语种 */
+const LANGS = [
+  ["zh-CN", "中文"], ["en", "English"], ["fr", "Français"], ["de", "Deutsch"],
+  ["ru", "Русский"], ["ar", "العربية"], ["ja", "日本語"], ["ko", "한국어"],
+];
+const RTL_LANGS = ["ar"];
+let I18N_ZH = {};   // 中文基准（兜底）
+let LANG_DATA = {}; // 当前语言
+let CUR_LANG = localStorage.getItem("appLang") || "zh-CN";
+
+function fmtStr(str, params) {
+  return String(str).replace(/\{(\w+)\}/g, (m, k) => (params && params[k] != null) ? params[k] : m);
+}
+function t(key, params) {
+  let s = (LANG_DATA && LANG_DATA[key] != null) ? LANG_DATA[key]
+        : (I18N_ZH[key] != null ? I18N_ZH[key] : key);
+  return params ? fmtStr(s, params) : s;
+}
+function applyI18n() {
+  document.querySelectorAll("[data-i18n]").forEach(el => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-title]").forEach(el => { el.title = t(el.dataset.i18nTitle); });
+  document.querySelectorAll("[data-i18n-ph]").forEach(el => { el.placeholder = t(el.dataset.i18nPh); });
+  document.documentElement.lang = CUR_LANG;
+  document.documentElement.dir = RTL_LANGS.includes(CUR_LANG) ? "rtl" : "ltr";
+  const sel = $("lang-select");
+  if (sel) sel.value = CUR_LANG;
+}
+async function initI18n() {
+  try {
+    I18N_ZH = await (await fetch("locales/zh-CN.json")).json();
+  } catch (e) { I18N_ZH = {}; }
+  try {
+    if (CUR_LANG !== "zh-CN") {
+      LANG_DATA = await (await fetch("locales/" + CUR_LANG + ".json")).json();
+    } else {
+      LANG_DATA = {}; // 🔴 切回中文必须清空上一语言缓存，否则 t() 仍优先读到旧语言
+    }
+  } catch (e) { LANG_DATA = {}; CUR_LANG = "zh-CN"; }
+  applyI18n();
+  // 动态文案刷新：下一步按钮文本依赖 noRoster 状态，由 JS 设置而非 data-i18n
+  if ($("input-next")) refreshInputNext();
+  gotoStep(S.current);
+}
+function switchLang(lang) {
+  CUR_LANG = lang;
+  localStorage.setItem("appLang", lang);
+  initI18n().then(() => {
+    // 重渲染已显示的动态区域（静态 data-i18n 文案已由 applyI18n 刷新）
+    loadTemplateLists();
+    if (S.roster) renderSheets();
+    if (S.columns.length && S.current === "fields") renderRoles();
+    if (S.tpl && S.current === "mapping") renderMapping();
+    if (S.current === "fill") renderFillForm();
+    if (S.outputs.length && S.current === "output") renderOutput();
+    if (S.outputs.length && S.current === "catout") renderCatout();
+  });
+}
+
+const STEP_LABEL = { input: "step.input", dedup: "step.dedup", fields: "step.fields", mapping: "step.mapping", fill: "step.fill", preview: "step.preview", output: "step.output", catout: "step.catout" };
 
 const S = {
   current: "input",
@@ -23,10 +81,17 @@ const S = {
 // ---------------------------------------------------------------- 工具
 function $(id) { return document.getElementById(id); }
 function toast(msg, ms) {
-  const t = $("toast");
-  t.textContent = msg; t.hidden = false;
-  clearTimeout(t._timer);
-  t._timer = setTimeout(() => { t.hidden = true; }, ms || 2600);
+  const el = $("toast");
+  el.textContent = msg; el.hidden = false;
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => { el.hidden = true; }, ms || 2600);
+}
+// 后端错误消息翻译：{error:原文, code:err.xxx, detail:剥离前缀后的动态部分}
+function errText(data) {
+  if (data && data.code && (LANG_DATA[data.code] != null || I18N_ZH[data.code] != null)) {
+    return t(data.code, { msg: data.detail || "", ext: data.detail || "", f: data.detail || "" });
+  }
+  return (data && data.error) || "HTTP Error";
 }
 async function api(path, opts) {
   let resp;
@@ -34,10 +99,10 @@ async function api(path, opts) {
     resp = await fetch(path, opts);
   } catch (e) {
     // fetch 网络层失败＝本机服务不在了（程序被关闭或未启动）
-    throw new Error("无法连接本机服务——程序可能已退出。请重新双击「通用签到表生成器.exe」后再试。");
+    throw new Error(t("err.conn"));
   }
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
+  if (!resp.ok) throw new Error(errText(data) || ("HTTP " + resp.status));
   return data;
 }
 // 面板内醒目错误条：不自动消失、就在操作按钮上方，解决"点了没反应"感知问题
@@ -77,7 +142,7 @@ function gotoStep(name) {
   $("stepper").innerHTML = list.map((s, i) => {
     let cls = "stp";
     if (s === name) cls += " on"; else if (i < idx) cls += " done";
-    return `<span class="${cls}">${STEP_LABEL[s]}</span>`;
+    return `<span class="${cls}">${esc(t(STEP_LABEL[s]))}</span>`;
   }).join("");
   window.scrollTo(0, 0);
 }
@@ -87,7 +152,7 @@ function backToPrev() {
 function refreshInputNext() {
   const ready = !!S.tpl && (S.noRoster || S.chosen.length > 0);
   $("input-next").disabled = !ready;
-  $("input-next").textContent = S.noRoster ? "下一步：填写信息 →" : "下一步：判重 →";
+  $("input-next").textContent = S.noRoster ? t("btn.nextDedupShort") : t("btn.nextDedup");
 }
 
 // ---------------------------------------------------------------- 第1步 输入
@@ -106,27 +171,27 @@ $("roster-file").onchange = async (e) => {
     S.chosen = firstData ? [{ key: firstData.key, headerRow: firstData.headerRow }] : [];
     renderSheets();
     refreshInputNext();
-    toast("名单读取成功：共 " + data.sheets.length + " 个工作表，已自动勾选「" + (firstData ? firstData.label : "") + "」。如需其他表（如协力工），请在下方勾选");
-  } catch (err) { toast("读取失败：" + err.message, 4000); }
+    toast(t("toast.rosterOk", { n: data.sheets.length, name: firstData ? firstData.label : "" }));
+  } catch (err) { toast(t("toast.readFail", { msg: err.message }), 4000); }
   e.target.value = "";
 };
 $("opt-noroster").onclick = () => {
-  const yes = confirm("是否确认【不需要填写人员名单】？\n\n确定 → 仅填写信息，生成姓名栏留空的空白签到表（将跳过判重/名单字段/对应关系）；\n取消 → 请点击「上传名单」。");
+  const yes = confirm(t("confirm.noRoster"));
   if (!yes) return;
   S.noRoster = true;
   post("/api/mode/noroster", { value: true }).then(refreshInputNext);
 };
 function renderSheets() {
   const box = $("roster-sheets");
-  box.innerHTML = "<h3>工作表（勾选参与生成的人员表）</h3>";
+  box.innerHTML = `<h3>${esc(t("s1.sheetsTitle"))}</h3>`;
   S.roster.sheets.forEach((sh, i) => {
     const checked = S.chosen.some(c => c.key === sh.key);
     const div = document.createElement("div");
     div.className = "sheet-block";
     div.innerHTML = `
       <label class="sh-title"><input type="checkbox" data-i="${i}" ${checked ? "checked" : ""}> ${esc(sh.label)}</label>
-      <div class="form-row"><label>表头所在行</label><input type="text" class="hr-input" data-i="${i}" value="${sh.headerRow}" ${checked ? "" : "disabled"}></div>
-      <div class="form-row"><label>概要</label><span class="hint">${sh.dataRows} 行数据 · 表头：${esc((sh.headers || []).slice(0, 8).join(" | "))}</span></div>`;
+      <div class="form-row"><label>${esc(t("s1.headerRow"))}</label><input type="text" class="hr-input" data-i="${i}" value="${sh.headerRow}" ${checked ? "" : "disabled"}></div>
+      <div class="form-row"><label>${esc(t("s1.summary"))}</label><span class="hint">${fmtStr(t("s1.rowsData"), { n: sh.dataRows, h: esc((sh.headers || []).slice(0, 8).join(" | ")) })}</span></div>`;
     box.appendChild(div);
   });
   box.querySelectorAll("input[type=checkbox]").forEach(cb => {
@@ -147,7 +212,7 @@ function renderSheets() {
   });
 }
 $("input-next").onclick = async () => {
-  if (!S.tpl) { showErr("请先在右侧选择签到表模板（内置 12 种任选其一，点卡片即选中）"); return; }
+  if (!S.tpl) { showErr(t("err.needTpl")); return; }
   if (S.noRoster) {
     try {
       await post("/api/mode/noroster", { value: true });
@@ -156,7 +221,7 @@ $("input-next").onclick = async () => {
     } catch (err) { toast(err.message, 4000); }
     return;
   }
-  if (S.chosen.length === 0) { showErr("请上传名单并在左侧勾选参与生成的工作表（只勾需要的那几张，如：本工、协力工）"); return; }
+  if (S.chosen.length === 0) { showErr(t("err.needSheet")); return; }
   try {
     const data = await post("/api/roster/config", { sheets: S.chosen });
     S.columns = data.columns; S.roles = data.roles;
@@ -167,14 +232,29 @@ $("input-next").onclick = async () => {
 };
 
 // 模板三个页签
-document.querySelectorAll(".tab").forEach(t => {
-  t.onclick = () => {
+document.querySelectorAll(".tab").forEach(el => {
+  el.onclick = () => {
     document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
-    t.classList.add("active");
-    ["builtin", "upload", "library"].forEach(k => { $("tab-" + k).hidden = k !== t.dataset.tab; });
-    if (t.dataset.tab === "library") loadTemplateLists();
+    el.classList.add("active");
+    ["builtin", "upload", "library"].forEach(k => { $("tab-" + k).hidden = k !== el.dataset.tab; });
+    if (el.dataset.tab === "library") loadTemplateLists();
   };
 });
+// 词条兜底取值：带前缀查翻译，查不到（返回原 key）时回退显示原始数据名
+function tb(prefix, raw) {
+  const s = t(prefix + raw);
+  return s === prefix + raw ? raw : s;
+}
+// 内置模板文件名 → 当前语言显示名（会议-现代灰 → Meeting - Modern Gray）
+// 类型/风格任一没查到词条时整体回退原文件名，避免"Meeting-现代灰"混搭
+function tplDisplayName(filename) {
+  const name = String(filename).replace(/\.docx$/, "");
+  const m = name.match(/^(.+?)-(.+)$/);
+  if (!m) return name;
+  const t1 = tb("btplType.", m[1]);
+  const t2 = tb("btplStyle.", m[2]);
+  return (t1 === m[1] && t2 === m[2]) ? name : t1 + " - " + t2;
+}
 async function loadTemplateLists() {
   try {
     const data = await api("/api/template/library");
@@ -182,7 +262,9 @@ async function loadTemplateLists() {
     grid.innerHTML = (data.builtins || []).map(b => {
       const name = b.replace(/\.docx$/, "");
       const m = name.match(/^(.+?)-(.+)$/);
-      return `<div class="tpl-card" data-id="${esc(b)}"><div class="t1">${esc(m ? m[1] : name)}</div><div class="t2">${esc(m ? m[2] : "")} · Word</div><button class="small tpl-pv" data-id="${esc(b)}" data-name="${esc(name)}">预览</button></div>`;
+      const t1 = m ? tb("btplType.", m[1]) : name;
+      const t2 = m ? tb("btplStyle.", m[2]) : "";
+      return `<div class="tpl-card" data-id="${esc(b)}"><div class="t1">${esc(t1)}</div><div class="t2">${esc(t2)}${esc(t("s1.word"))}</div><button class="small tpl-pv" data-id="${esc(b)}" data-name="${esc(name)}">${esc(t("btn.preview"))}</button></div>`;
     }).join("");
     grid.querySelectorAll(".tpl-card").forEach(card => {
       card.onclick = () => selectBuiltin(card.dataset.id, card);
@@ -192,16 +274,15 @@ async function loadTemplateLists() {
     });
     const lib = $("library-list");
     lib.innerHTML = (data.library || []).length === 0
-      ? "<p class='hint'>模板库还是空的。上传模板后勾选「保存到模板库」，下次就能直接调用。</p>"
-      : "<table class='tbl'><tr><th>模板名</th><th>格式</th><th>保存时间</th><th></th></tr>" +
-        data.library.map(e => `<tr><td>${esc(e.name)}</td><td>${e.kind}</td><td>${esc(e.savedAt)}</td><td><button class="small" data-name="${esc(e.name)}" data-kind="${e.kind}">调用</button></td></tr>`).join("") +
+      ? `<p class='hint'>${esc(t("lib.empty"))}</p>`
+      : "<table class='tbl'><tr><th>" + esc(t("th.tplName")) + "</th><th>" + esc(t("th.format")) + "</th><th>" + esc(t("th.savedAt")) + "</th><th></th></tr>" +
+        data.library.map(e => `<tr><td>${esc(e.name)}</td><td>${e.kind}</td><td>${esc(e.savedAt)}</td><td><button class="small" data-name="${esc(e.name)}" data-kind="${e.kind}">${esc(t("btn.use"))}</button></td></tr>`).join("") +
         "</table>";
     lib.querySelectorAll("button[data-name]").forEach(btn => {
       btn.onclick = () => loadLibrary(btn.dataset.name, btn.dataset.kind);
     });
   } catch (err) { toast(err.message, 4000); }
 }
-loadTemplateLists();
 async function selectBuiltin(id, card) {
   if (card) {
     document.querySelectorAll(".tpl-card").forEach(c => c.classList.remove("sel"));
@@ -218,21 +299,18 @@ let pvPendingId = null, pvPendingCard = null;
 async function openTplPreview(id, name, card) {
   const body = $("tpl-preview-body");
   pvPendingId = id; pvPendingCard = card || null;
-  $("tpl-preview-title").textContent = "模板预览：" + (name || "当前模板");
+  $("tpl-preview-title").textContent = t("tpl.previewName", { name: name ? tplDisplayName(name) : t("tpl.curName") });
   $("tpl-preview-use").hidden = !id;
-  body.innerHTML = "<p class='hint'>预览加载中……</p>";
+  body.innerHTML = `<p class='hint'>${esc(t("tpl.loading"))}</p>`;
   $("tpl-preview-modal").hidden = false;
   try {
     const url = id ? "/api/template/preview?id=" + encodeURIComponent(id) : "/api/template/preview";
     const resp = await fetch(url);
-    if (!resp.ok) throw new Error((await resp.json()).error || "预览失败");
+    if (!resp.ok) throw new Error((await resp.json()).error || t("s6.pvFail"));
     body.innerHTML = await resp.text();
   } catch (err) {
     const msg = String(err.message || err);
-    body.innerHTML = "<p class='hint'>预览加载失败：" +
-      (msg === "Failed to fetch"
-        ? "无法连接本机服务——程序可能已退出，请重新双击「通用签到表生成器.exe」后刷新本页面。"
-        : esc(msg)) + "</p>";
+    body.innerHTML = `<p class='hint'>${esc(t("tpl.fail", { msg: msg === "Failed to fetch" ? t("tpl.failConn") : esc(msg) }))}</p>`;
   }
 }
 $("tpl-preview-close").onclick = () => { $("tpl-preview-modal").hidden = true; };
@@ -244,7 +322,7 @@ async function loadLibrary(name, kind) {
   try {
     const data = await post("/api/template/library-load", { name, kind });
     onTemplateReady(data, "library");
-    toast("已调用模板：" + name);
+    toast(t("toast.libLoaded", { name }));
   } catch (err) { toast(err.message, 4000); }
 }
 $("tpl-upload-card").onclick = () => $("tpl-file").click();
@@ -257,7 +335,7 @@ $("tpl-file").onchange = async (e) => {
     const data = await api("/api/template/upload", { method: "POST", body: fd });
     onTemplateReady(data, "upload");
     $("tpl-save-area").hidden = false;
-    toast("模板解析成功");
+    toast(t("toast.tplOk"));
   } catch (err) { toast(err.message, 4500); }
   e.target.value = "";
 };
@@ -268,15 +346,15 @@ function onTemplateReady(data, source) {
   const colN = (a.dataCols || []).filter(c => !c.isName).length;
   $("tpl-analysis").innerHTML = `
     <div class="sheet-block" style="margin-top:14px;">
-      <div class="sh-title">模板解析结果</div>
-      <div class="form-row"><label>模板标题</label><span>${esc(a.title || "（未识别，将用「签到表」命名）")}</span></div>
-      <div class="form-row"><label>格式</label><span>${a.kind === "xlsx" ? "Excel" : "Word"}${a.sheet ? " · 工作表：" + esc(a.sheet) : ""}</span></div>
-      <div class="form-row"><label>单张容量</label><span><b>${a.capacity}</b> 人（${a.dataRows} 行 × ${a.nameCols.length} 个姓名栏）</span></div>
-      <div class="form-row"><label>识别结果</label><span>数据区可映射列 ${a.dataCols.length} 个（姓名列 ${a.nameCols.length} 个${colN ? "、其他 " + colN + " 个" : ""}）· 信息字段 ${(a.tplFields || []).length} 个（留空识别 ${blankN} 个）</span></div>
-      <div class="form-row"><label></label><span><button class="small" id="tpl-cur-pv">预览此模板</button></span></div>
+      <div class="sh-title">${esc(t("ana.title"))}</div>
+      <div class="form-row"><label>${esc(t("ana.label"))}</label><span>${esc(a.title || t("ana.noTitle"))}</span></div>
+      <div class="form-row"><label>${esc(t("ana.format"))}</label><span>${a.kind === "xlsx" ? "Excel" : "Word"}${a.sheet ? esc(t("ana.sheet", { s: a.sheet })) : ""}</span></div>
+      <div class="form-row"><label>${esc(t("ana.cap"))}</label><span><b>${a.capacity}</b> ${esc(t("ana.person"))}（${a.dataRows} × ${a.nameCols.length}）</span></div>
+      <div class="form-row"><label>${esc(t("ana.recog"))}</label><span>${esc(t("ana.recogVal", { cols: a.dataCols.length, names: a.nameCols.length, others: colN, fields: (a.tplFields || []).length, blank: blankN }))}</span></div>
+      <div class="form-row"><label></label><span><button class="small" id="tpl-cur-pv">${esc(t("ana.pv"))}</button></span></div>
     </div>`;
   const curPv = $("tpl-cur-pv");
-  if (curPv) curPv.onclick = () => openTplPreview("", "当前模板", null);
+  if (curPv) curPv.onclick = () => openTplPreview("", t("tpl.curName"), null);
   $("tpl-save-area").hidden = source !== "upload";
   $("tpl-save-check").checked = false;
   $("tpl-save-name").hidden = true;
@@ -287,17 +365,17 @@ $("tpl-name").onchange = saveTpl;
 function saveTpl() {
   const name = $("tpl-name").value.trim();
   if (!name) return;
-  post("/api/template/save", { name }).then(() => toast("已保存到模板库：" + name)).catch(err => toast(err.message, 4000));
+  post("/api/template/save", { name }).then(() => toast(t("toast.savedLib", { name }))).catch(err => toast(err.message, 4000));
 }
 
 // ---------------------------------------------------------------- 第2步 判重
 async function loadDupGroups() {
   const box = $("dup-groups");
-  box.innerHTML = "<p class='hint'>正在分析重复项……</p>";
+  box.innerHTML = `<p class='hint'>${esc(t("s2.analyzing"))}</p>`;
   try {
     const data = await post("/api/dedup/prepare", {});
     if (!data.groups || data.groups.length === 0) {
-      box.innerHTML = "<p class='hint'>未发现重复条目，可直接进入下一步。</p>";
+      box.innerHTML = `<p class='hint'>${esc(t("s2.none"))}</p>`;
       return;
     }
     box.innerHTML = "";
@@ -305,15 +383,15 @@ async function loadDupGroups() {
       const div = document.createElement("div");
       div.className = "dup-group";
       const keyPreview = g.items[0].cells.filter(c => c).slice(0, 4).join(" / ");
-      div.innerHTML = `<div class="dg-title">重复组 ${gi + 1}（${g.items.length} 条）：${esc(keyPreview)}</div>`;
+      div.innerHTML = `<div class="dg-title">${esc(t("s2.group", { n: gi + 1, c: g.items.length, k: keyPreview }))}</div>`;
       g.items.forEach((it, ii) => {
         const row = document.createElement("div");
         row.className = "dup-item";
         row.dataset.g = gi; row.dataset.i = ii; row.dataset.remove = it.remove;
         row.innerHTML = `
           <span class="cells">[${esc(it.sheetLabel)}] ${esc(it.cells.filter(c => c).join(" | "))}</span>
-          <button class="${it.remove ? "" : "on-keep"}" data-v="keep">不重复</button>
-          <button class="${it.remove ? "on-del" : ""}" data-v="del">重复（删除）</button>`;
+          <button class="${it.remove ? "" : "on-keep"}" data-v="keep">${esc(t("btn.keep"))}</button>
+          <button class="${it.remove ? "on-del" : ""}" data-v="del">${esc(t("btn.dup"))}</button>`;
         div.appendChild(row);
       });
       box.appendChild(div);
@@ -345,19 +423,14 @@ $("dedup-next").onclick = async () => {
     const data = await post("/api/dedup/apply", { remove });
     S.remainTotal = data.total;
     const removedN = remove.length;
-    toast(removedN ? `已标记删除 ${removedN} 条，剩余 ${data.total} 人` : `无重复项，共 ${data.total} 人`);
+    toast(removedN ? t("toast.marked", { n: removedN, t: data.total }) : t("toast.noDup", { t: data.total }));
     renderRoles();
     gotoStep("fields");
   } catch (err) { toast(err.message, 4000); }
 };
 
 // ---------------------------------------------------------------- 第3步 名单字段用途
-const PURPOSE = [
-  ["fill", "自动填入"],
-  ["cat", "分类基础"],
-  ["exclude", "排除依据"],
-  ["none", "不使用"],
-];
+const PURPOSE = [["fill", "purpose.fill"], ["cat", "purpose.cat"], ["exclude", "purpose.exclude"], ["none", "purpose.none"]];
 function purposeOf(role, col) {
   if ((role.fillCols || []).includes(col)) return "fill";
   if (role.catCol === col) return "cat";
@@ -374,17 +447,17 @@ function renderRoles() {
     const rows = c.headers.map((h, i) => {
       const p = purposeOf(role, i);
       return `<tr>
-        <td>${esc(h || "（空列名）")} <small class="hint">第${i + 1}列</small></td>
-        <td><select data-key="${esc(c.key)}" data-col="${i}">${PURPOSE.map(([v, t]) =>
-          `<option value="${v}" ${p === v ? "selected" : ""}>${t}</option>`).join("")}</select></td>
-        <td><input type="text" class="excl-val" data-key="${esc(c.key)}" data-col="${i}" value="${esc(role.excludeCol === i ? (role.excludeVal || "") : "")}" placeholder="列值＝此值时排除，如：外派" style="width:100%;${p === "exclude" ? "" : "visibility:hidden"}"></td>
+        <td>${esc(h || t("s3.emptyCol"))} <small class="hint">${esc(t("s3.colN", { n: i + 1 }))}</small></td>
+        <td><select data-key="${esc(c.key)}" data-col="${i}">${PURPOSE.map(([v, k]) =>
+          `<option value="${v}" ${p === v ? "selected" : ""}>${esc(t(k))}</option>`).join("")}</select></td>
+        <td><input type="text" class="excl-val" data-key="${esc(c.key)}" data-col="${i}" value="${esc(role.excludeCol === i ? (role.excludeVal || "") : "")}" placeholder="${esc(t("s3.exclPh"))}" style="width:100%;${p === "exclude" ? "" : "visibility:hidden"}"></td>
       </tr>`;
     }).join("");
     const div = document.createElement("div");
     div.className = "sheet-block";
     div.innerHTML = `
-      <div class="sh-title">${esc(c.label)}　<small class="hint">${c.count} 行数据</small></div>
-      <table class="tbl"><tr><th>名单列</th><th>用途</th><th>排除值</th></tr>${rows}</table>`;
+      <div class="sh-title">${esc(c.label)}　<small class="hint">${esc(t("s3.rowsData", { n: c.count }))}</small></div>
+      <table class="tbl"><tr><th>${esc(t("th.rosterCol"))}</th><th>${esc(t("th.purpose"))}</th><th>${esc(t("th.exclVal"))}</th></tr>${rows}</table>`;
     box.appendChild(div);
   });
   box.querySelectorAll("select[data-key]").forEach(sel => {
@@ -403,10 +476,10 @@ function renderMerges() {
     const row = document.createElement("div");
     row.className = "fill-dynamic";
     row.innerHTML = `
-      <input type="text" class="mg-from" value="${esc(m[0])}" placeholder="原分类名，如：维修组" style="max-width:220px;">
-      <span>→ 并入 →</span>
-      <input type="text" class="mg-into" value="${esc(m[1])}" placeholder="目标分类名，如：维修班" style="max-width:220px;">
-      <button class="small" onclick="this.parentElement.remove()">删除</button>`;
+      <input type="text" class="mg-from" value="${esc(m[0])}" placeholder="${esc(t("s3.mergeFromPh"))}" style="max-width:220px;">
+      <span>${esc(t("s3.mergeArrow"))}</span>
+      <input type="text" class="mg-into" value="${esc(m[1])}" placeholder="${esc(t("s3.mergeIntoPh"))}" style="max-width:220px;">
+      <button class="small" onclick="this.parentElement.remove()">${esc(t("btn.del"))}</button>`;
     box.appendChild(row);
   });
 }
@@ -436,8 +509,8 @@ $("fields-next").onclick = async () => {
   const merges = [];
   document.querySelectorAll("#merge-rules .fill-dynamic").forEach(row => {
     const f = row.querySelector(".mg-from").value.trim();
-    const t = row.querySelector(".mg-into").value.trim();
-    if (f && t) merges.push([f, t]);
+    const to = row.querySelector(".mg-into").value.trim();
+    if (f && to) merges.push([f, to]);
   });
   // 校验（只针对勾选参与的工作表；错误具体到表名并醒目显示）
   const chosenKeys = new Set(S.chosen.map(c => c.key));
@@ -447,7 +520,7 @@ $("fields-next").onclick = async () => {
       const c = S.columns.find(c => c.key === k);
       return c ? "「" + c.label + "」" : k;
     }).join("、");
-    showErr("下面工作表还没有设置「自动填入」列（至少要把姓名列设为自动填入）：" + label);
+    showErr(t("err.needFill", { labels: label }));
     return;
   }
   S.merges = merges;
@@ -464,7 +537,7 @@ function computeFillFields() {
   S.columns.forEach(c => {
     const role = S.roles[c.key] || {};
     (role.fillCols || []).forEach(col => {
-      const name = c.headers[col] || `第${col + 1}列`;
+      const name = c.headers[col] || t("s3.colN", { n: col + 1 });
       if (!set.includes(name)) set.push(name);
     });
   });
@@ -472,10 +545,10 @@ function computeFillFields() {
 }
 
 // ---------------------------------------------------------------- 第4步 对应关系
-const CONTROL_LABEL = { text: "文本", longtext: "多行文本", list: "多条内容", persons: "多人(最多5)", select: "下拉选择", location: "多条地点(最多3)", date: "日期", time: "时间", auto: "自动生成" };
-const SOURCE_LABEL = [["fill", "用户填写"], ["auto", "自动生成"], ["roster", "由名单提供"], ["skip", "忽略"]];
+const CONTROL_LABEL = { text: "ctrl.text", longtext: "ctrl.longtext", list: "ctrl.list", persons: "ctrl.persons", select: "ctrl.select", location: "ctrl.location", date: "ctrl.date", time: "ctrl.time", auto: "ctrl.auto" };
+const SOURCE_LABEL = [["fill", "src.fill"], ["auto", "src.auto"], ["roster", "src.roster"], ["skip", "src.skip"]];
 function fieldOptions(sel, withBlank, blankText) {
-  let html = withBlank ? `<option value="">${blankText || "（留空手写）"}</option>` : "";
+  let html = withBlank ? `<option value="">${esc(blankText || t("opt.hand"))}</option>` : "";
   html += S.fillFields.map(f => `<option value="${esc(f)}" ${f === sel ? "selected" : ""}>${esc(f)}</option>`).join("");
   return html;
 }
@@ -485,7 +558,7 @@ function renderMapping() {
   mbox.innerHTML = "";
   const dc = S.tpl && S.tpl.dataCols ? S.tpl.dataCols : [];
   if (!dc.length) {
-    mbox.innerHTML = "<p class='hint'>该模板未识别出数据区可映射列。</p>";
+    mbox.innerHTML = `<p class='hint'>${esc(t("s4.noCols"))}</p>`;
   }
   // 姓名列不参与映射（姓名由生成器自动依次填入，映射会导致同一人名复制到多个姓名格）
   S._mapping = (S._mapping || []).filter(m => !dc.find(c => c.colIdx === m.colIdx && c.isName));
@@ -495,14 +568,14 @@ function renderMapping() {
     div.className = "form-row";
     if (col.isName) {
       div.innerHTML = `
-        <label>${esc(col.label)} <b>（姓名列）</b> <small class="hint">列 ${col.colIdx}</small></label>
-        <span class="hint">自动依次填入不同人员，无需映射</span>`;
+        <label>${esc(col.label)} <b>${esc(t("s4.nameCol"))}</b> <small class="hint">${esc(t("s4.col", { n: col.colIdx }))}</small></label>
+        <span class="hint">${esc(t("s4.autoFill"))}</span>`;
       mbox.appendChild(div);
       return;
     }
     const cur = (S._mapping.find(m => m.colIdx === col.colIdx) || {}).field || "";
     div.innerHTML = `
-      <label>${esc(col.label)} <small class="hint">列 ${col.colIdx}</small></label>
+      <label>${esc(col.label)} <small class="hint">${esc(t("s4.col", { n: col.colIdx }))}</small></label>
       <select data-col="${col.colIdx}">${fieldOptions(cur, true)}</select>`;
     mbox.appendChild(div);
   });
@@ -528,7 +601,7 @@ function defaultMapping(dc) {
 function renderDesign() {
   const box = $("design-list");
   if (!S.fields.length) {
-    box.innerHTML = "<p class='hint'>该模板没有识别出信息字段。签到表将只填人员名单。<br>若模板里有需要填写的栏目，请确认其为「标签格＋空白格」样式，或直接在第⑤步检查。</p>";
+    box.innerHTML = `<p class='hint'>${t("s4.noFields")}</p>`;
     return;
   }
   box.innerHTML = "";
@@ -537,13 +610,13 @@ function renderDesign() {
     row.className = "design-row v2";
     row.innerHTML = `
       <span class="dn"><input type="text" class="fname" data-i="${i}" value="${esc(f.name)}" style="width:100%;">
-        <small>${f.kind === "blank" ? "留空字段" : "占位符"}${f.default ? " · 预填：" + esc(f.default.slice(0, 12)) : ""}</small></span>
+        <small>${f.kind === "blank" ? esc(t("field.blank")) : esc(t("field.ph"))}${f.default ? esc(t("field.prefill", { v: f.default.slice(0, 12) })) : ""}</small></span>
       <select data-i="${i}" data-k="mode">
-        ${SOURCE_LABEL.map(([v, t]) => `<option value="${v}" ${f.mode === v ? "selected" : ""}>${t}</option>`).join("")}
+        ${SOURCE_LABEL.map(([v, k]) => `<option value="${v}" ${f.mode === v ? "selected" : ""}>${esc(t(k))}</option>`).join("")}
       </select>
       <select data-i="${i}" data-k="rosterField" ${f.mode === "roster" ? "" : "hidden"}>${fieldOptions(f.rosterField, false)}</select>
       <select data-i="${i}" data-k="control" ${f.mode === "fill" ? "" : "hidden"}>
-        ${Object.entries(CONTROL_LABEL).map(([k, v]) => `<option value="${k}" ${f.control === k ? "selected" : ""}>${v}</option>`).join("")}
+        ${Object.entries(CONTROL_LABEL).map(([k, kk]) => `<option value="${k}" ${f.control === k ? "selected" : ""}>${esc(t(kk))}</option>`).join("")}
       </select>`;
     box.appendChild(row);
   });
@@ -580,14 +653,13 @@ function dynInput(placeholder, max) {
   wrap.appendChild(inner); wrap.appendChild(addBtn);
   const count = () => inner.children.length;
   const updateBtn = () => {
-    addBtn.textContent = "＋ 加一条";
-    if (max) addBtn.textContent = `＋ 加一条（${count()}/${max}）`;
+    addBtn.textContent = max ? t("dyn.addMax", { c: count(), m: max }) : t("dyn.add");
     addBtn.disabled = max ? count() >= max : false;
   };
   const addRow = (val) => {
     const r = document.createElement("div");
     r.className = "fill-dynamic";
-    r.innerHTML = `<input type="text" placeholder="${placeholder}"> <button type="button" class="small">－</button>`;
+    r.innerHTML = `<input type="text" placeholder="${esc(placeholder)}"> <button type="button" class="small">－</button>`;
     r.querySelector("button").onclick = () => { r.remove(); updateBtn(); };
     if (val) r.querySelector("input").value = val;
     inner.appendChild(r);
@@ -602,7 +674,7 @@ function renderFillForm() {
   const box = $("fill-form");
   box.innerHTML = "";
   const fillable = S.fields.filter(f => f.mode === "fill");
-  if (!fillable.length) box.innerHTML = "<p class='hint'>没有需要手动填写的字段。</p>";
+  if (!fillable.length) box.innerHTML = `<p class='hint'>${esc(t("s5.none"))}</p>`;
   fillable.forEach(f => {
     const row = document.createElement("div");
     row.className = "form-row";
@@ -613,9 +685,9 @@ function renderFillForm() {
     cell.dataset.fname = f.name;
     let input;
     switch (f.control) {
-      case "list": cell.appendChild(dynInput("第几条内容")); break;
-      case "persons": cell.appendChild(dynInput("姓名", 5)); break;
-      case "location": cell.appendChild(dynInput("地点", 3)); break;
+      case "list": cell.appendChild(dynInput(t("ph.content"))); break;
+      case "persons": cell.appendChild(dynInput(t("ph.name"), 5)); break;
+      case "location": cell.appendChild(dynInput(t("ph.place"), 3)); break;
       case "select": {
         input = document.createElement("select");
         (f.options || []).forEach(o => { const op = document.createElement("option"); op.textContent = o; input.appendChild(op); });
@@ -627,7 +699,7 @@ function renderFillForm() {
         w.style.display = "flex"; w.style.gap = "8px"; w.style.alignItems = "center";
         const t1 = document.createElement("input"); t1.type = "time"; t1.value = "09:00";
         const t2 = document.createElement("input"); t2.type = "time"; t2.value = "11:30";
-        w.appendChild(t1); w.appendChild(document.createTextNode(" 至 ")); w.appendChild(t2);
+        w.appendChild(t1); w.appendChild(document.createTextNode(t("time.to"))); w.appendChild(t2);
         w._values = () => [(t1.value && t2.value ? t1.value + "-" + t2.value : (t1.value || t2.value || ""))];
         cell.appendChild(w); break;
       }
@@ -641,9 +713,9 @@ function renderFillForm() {
   if (!S.noRoster && S.tpl) {
     const row = document.createElement("div");
     row.className = "form-row";
-    row.innerHTML = `<label>单张签到表容量</label>
-      <div>每张 <input type="text" id="cap-input" value="${S.tpl.capacity}" style="width:70px;"> 人
-      <span class="hint">（模板最大 ${S.tpl.capacity} 人；超出自动拆成多张，填写信息每张都有）</span></div>`;
+    row.innerHTML = `<label>${esc(t("s5.capLabel"))}</label>
+      <div>${esc(t("s5.capPre"))} <input type="text" id="cap-input" value="${S.tpl.capacity}" style="width:70px;"> ${esc(t("ana.person"))}
+      <span class="hint">${esc(t("s5.capHint", { m: S.tpl.capacity }))}</span></div>`;
     box.appendChild(row);
   }
   // 自动/名单来源字段说明
@@ -651,10 +723,10 @@ function renderFillForm() {
   if (autos.length) {
     const p = document.createElement("p");
     p.className = "hint";
-    p.innerHTML = "自动处理：" + autos.map(f =>
-      esc(f.name) + (f.mode === "roster" ? "（←名单字段：" + esc(f.rosterField || "未选") + "）"
-        : f.name.includes("人数") ? (S.remainTotal != null ? `（= ${S.remainTotal} 人）` : "") : "")
-    ).join("、");
+    p.innerHTML = esc(t("s5.autoNote")) + autos.map(f =>
+        esc(f.name) + (f.mode === "roster" ? esc(t("src.rosterFrom", { f: f.rosterField || t("src.rosterNone") }))
+          : f.name.includes("人数") ? (S.remainTotal != null ? esc(t("s5.peopleEq", { n: S.remainTotal })) : "") : "")
+      ).join("、");
     box.appendChild(p);
   }
 }
@@ -675,10 +747,10 @@ $("gen-btn").onclick = async () => {
       const inp = cell.querySelector("input,select");
       if (inp) fill[name] = inp.value.trim();
     });
-  } catch (err) { showErr("填写信息读取失败：" + err.message); return; }
+  } catch (err) { showErr(t("err.fillRead", { msg: err.message })); return; }
   const cap = +($("cap-input") ? $("cap-input").value : 0);
   const btn = $("gen-btn");
-  btn.disabled = true; btn.textContent = "正在生成……";
+  btn.disabled = true; btn.textContent = t("btn.genBusy");
   try {
     const data = await post("/api/generate", { fill, capacity: cap });
     S.outputs = data.outputs || [];
@@ -686,13 +758,12 @@ $("gen-btn").onclick = async () => {
     renderPreview();
     gotoStep("preview");
   } catch (err) { showErr(err.message); }
-  btn.disabled = false; btn.textContent = "生成并预览 ↗";
+  btn.disabled = false; btn.textContent = t("btn.gen");
 };
 
 // ---------------------------------------------------------------- 第6步 预览
 function renderPreview() {
-  $("preview-summary").innerHTML =
-    `共生成 <b>${S.outputs.length}</b> 张签到表，填写 <b>${S.outputs.reduce((a, o) => a + o.count, 0)}</b> 人次。请逐张检查，确认后进入输出。`;
+  $("preview-summary").innerHTML = t("s6.summary", { n: S.outputs.length, t: S.outputs.reduce((a, o) => a + o.count, 0) });
   const list = $("preview-list");
   list.innerHTML = "";
   S.outputs.forEach((o) => {
@@ -700,14 +771,14 @@ function renderPreview() {
     block.className = "pv-block";
     block.innerHTML = `
       <div class="pv-head-bar">
-        <span><b>${esc(o.file)}</b>　${o.group ? "分类：" + esc(o.group) + " · " : ""}第 ${o.part}/${o.parts} 张 · ${o.count} 人</span>
+        <span><b>${esc(o.file)}</b>　${o.group ? esc(t("s6.group", { g: o.group })) : ""}${esc(t("s6.part", { p: o.part, parts: o.parts, c: o.count }))}</span>
       </div>
-      <div class="pv-body" data-f="${encodeURIComponent(o.file)}"><p class="hint">预览加载中……</p></div>`;
+      <div class="pv-body" data-f="${encodeURIComponent(o.file)}"><p class="hint">${esc(t("tpl.loading"))}</p></div>`;
     list.appendChild(block);
     fetch("/api/preview?file=" + encodeURIComponent(o.file))
       .then(r => r.text())
       .then(html => { block.querySelector(".pv-body").innerHTML = html; })
-      .catch(() => { block.querySelector(".pv-body").innerHTML = "<p class='hint'>预览加载失败</p>"; });
+      .catch(() => { block.querySelector(".pv-body").innerHTML = `<p class='hint'>${esc(t("s6.pvFail"))}</p>`; });
   });
 }
 $("to-output").onclick = () => { renderOutput(); gotoStep("output"); };
@@ -715,14 +786,15 @@ $("to-output").onclick = () => { renderOutput(); gotoStep("output"); };
 // ---------------------------------------------------------------- 第7步 输出
 function renderOutput() {
   const total = S.outputs.reduce((a, o) => a + o.count, 0);
-  $("output-summary").innerHTML =
-    `共 <b>${new Set(S.outputs.map(o => o.group)).size}</b> 个分类，<b>${S.outputs.length}</b> 张签到表，填写 <b>${total}</b> 人次。文件为 Word 格式。`;
+  $("output-summary").innerHTML = t("s7.summary", {
+    g: new Set(S.outputs.map(o => o.group)).size, n: S.outputs.length, t: total,
+  });
   const list = $("output-list");
   list.innerHTML = S.outputs.map(o => `
     <div class="out-row">
       <span class="out-name">${esc(o.file)}</span>
-      <span class="hint">${o.group ? esc(o.group) + " · " : ""}第 ${o.part}/${o.parts} 张 · ${o.count} 人</span>
-      <a class="button small" href="/api/download?file=${encodeURIComponent(o.file)}">下载 Word</a>
+      <span class="hint">${o.group ? esc(o.group) + " · " : ""}${esc(t("s6.part", { p: o.part, parts: o.parts, c: o.count }))}</span>
+      <a class="button small" href="/api/download?file=${encodeURIComponent(o.file)}">${esc(t("btn.dlWord"))}</a>
     </div>`).join("");
   $("dl-all").href = "/api/download-all";
   $("dl-all2").href = "/api/download-all";
@@ -742,15 +814,15 @@ function renderCatout() {
     const items = byGroup[g];
     return `
     <div class="sheet-block">
-      <div class="sh-title">${esc(g || "未分类")}　<small class="hint">${items.length} 张 · 共 ${items.reduce((a, o) => a + o.count, 0)} 人</small></div>
+      <div class="sh-title">${esc(g || t("s8.uncat"))}　<small class="hint">${esc(t("s8.gSummary", { n: items.length, t: items.reduce((a, o) => a + o.count, 0) }))}</small></div>
       ${items.map(o => `
         <div class="out-row">
           <span class="out-name">${esc(o.file)}</span>
-          <span class="hint">${o.count} 人</span>
-          <a class="button small" href="/api/download?file=${encodeURIComponent(o.file)}">下载</a>
+          <span class="hint">${o.count} ${esc(t("ana.person"))}</span>
+          <a class="button small" href="/api/download?file=${encodeURIComponent(o.file)}">${esc(t("btn.dl"))}</a>
         </div>`).join("")}
       <div class="out-row"><span></span><span></span>
-        <a class="button small primary" href="/api/download-group?group=${encodeURIComponent(g)}">打包下载该分类（zip）</a>
+        <a class="button small primary" href="/api/download-group?group=${encodeURIComponent(g)}">${esc(t("btn.dlGroup"))}</a>
       </div>
     </div>`;
   }).join("");
@@ -767,13 +839,46 @@ function redoKeep() {
   closeRedo();
   gotoStep("input");
 }
-$("finish-btn").onclick = () => toast("本次生成完成。可点击「重做」开始新一轮。");
-$("finish-btn2").onclick = () => toast("本次生成完成。可点击「重做」开始新一轮。");
+$("finish-btn").onclick = () => toast(t("toast.done"));
+$("finish-btn2").onclick = () => toast(t("toast.done"));
 $("cancel-btn").onclick = async () => {
-  if (!confirm("确定取消本次生成？已填写的信息将清空。")) return;
+  if (!confirm(t("confirm.cancel"))) return;
   await post("/api/reset", {});
   window.location.reload();
 };
 
+// 上一步/弹窗按钮绑定（onclick 内联已改为 id，便于 CSP 与统一管理）
+$("back-input").onclick = () => gotoStep("input");
+$("back-dedup").onclick = () => gotoStep("dedup");
+$("back-fields").onclick = () => gotoStep("fields");
+$("back-mapping").onclick = () => backToPrev();
+$("back-fill").onclick = () => gotoStep("fill");
+$("back-output").onclick = () => gotoStep("output");
+$("add-merge").onclick = () => addMergeRule();
+$("redo-new").onclick = () => redoNew();
+$("redo-keep").onclick = () => redoKeep();
+$("redo-back").onclick = () => closeRedo();
+
+// ---------------------------------------------------------------- 退出按钮：仅浏览器回退模式显示
+// WebView 内嵌模式下关窗口即退出，按钮冗余；浏览器模式（WebView2 不可用回退 / 直接访问
+// http://127.0.0.1:17877）关标签页不会结束进程，需要此按钮停止服务
+(function initExitBtn() {
+  const mode = window.APP_MODE || "webview";
+  if (mode === "webview") {
+    const link = $("exit-link");
+    if (link) link.style.display = "none";
+  }
+})();
+
+// ---------------------------------------------------------------- 语言切换器
+(function initLangSel() {
+  const sel = $("lang-select");
+  sel.innerHTML = LANGS.map(([code, name]) => `<option value="${code}">${name}</option>`).join("");
+  sel.value = CUR_LANG;
+  sel.onchange = () => switchLang(sel.value);
+})();
+
 // ---------------------------------------------------------------- 启动
 gotoStep("input");
+// 语言包加载完成后再渲染模板列表，避免词条键（如 btn.preview）在翻译就绪前露出
+initI18n().then(() => loadTemplateLists());

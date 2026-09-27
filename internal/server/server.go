@@ -409,9 +409,10 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func writeErr(w http.ResponseWriter, code int, msg string) {
+	ec, detail := matchErr(msg)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	json.NewEncoder(w).Encode(map[string]string{"error": msg, "code": ec, "detail": detail})
 }
 
 func readBody(r *http.Request, v any) error {

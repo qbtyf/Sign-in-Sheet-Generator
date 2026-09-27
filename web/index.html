@@ -8,52 +8,55 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><span class="logo">签</span>通用签到表生成器</div>
+  <div class="brand"><span class="logo">签</span><span data-i18n="app.title">通用签到表生成器</span></div>
   <div class="steps" id="stepper"></div>
-  <a class="exit-link" href="/api/shutdown" title="结束程序（服务停止后本页面将失效）">退出程序</a>
+  <div class="top-right">
+    <select id="lang-select" title="Language"></select>
+    <a class="exit-link" id="exit-link" href="/api/shutdown" data-i18n="app.exit" data-i18n-title="app.exitTip">退出程序</a>
+  </div>
 </header>
 
 <main id="main">
   <!-- 第1步 输入：名单 + 模板 -->
   <section class="panel" id="step-input" hidden>
-    <h2>① 输入名单与模板</h2>
-    <p class="hint">左侧提供人员名单（可跳过），右侧选择签到表模板（上传 / 内置 / 模板库）。两项就绪后点击"下一步"。</p>
+    <h2 data-i18n="s1.title">① 输入名单与模板</h2>
+    <p class="hint" data-i18n="s1.hint">左侧提供人员名单（可跳过），右侧选择签到表模板（上传 / 内置 / 模板库）。两项就绪后点击"下一步"。</p>
     <div class="input-cols">
       <div class="input-col">
-        <h3>人员名单</h3>
+        <h3 data-i18n="s1.rosterTitle">人员名单</h3>
         <div class="card-row">
           <div class="option-card" id="opt-upload">
-            <div class="oc-title">上传名单</div>
+            <div class="oc-title" data-i18n="s1.uploadTitle">上传名单</div>
             <div class="oc-desc">.xlsx / .docx</div>
             <input type="file" id="roster-file" accept=".xlsx,.docx" hidden>
           </div>
           <div class="option-card" id="opt-noroster">
-            <div class="oc-title">跳过名单</div>
-            <div class="oc-desc">生成空白签到表</div>
+            <div class="oc-title" data-i18n="s1.skipTitle">跳过名单</div>
+            <div class="oc-desc" data-i18n="s1.skipDesc">生成空白签到表</div>
           </div>
         </div>
         <div id="roster-sheets"></div>
       </div>
       <div class="input-col">
-        <h3>签到表模板</h3>
+        <h3 data-i18n="s1.tplTitle">签到表模板</h3>
         <div class="tabs">
-          <button class="tab active" data-tab="builtin">内置模板</button>
-          <button class="tab" data-tab="upload">上传模板</button>
-          <button class="tab" data-tab="library">我的模板库</button>
+          <button class="tab active" data-tab="builtin" data-i18n="tab.builtin">内置模板</button>
+          <button class="tab" data-tab="upload" data-i18n="tab.upload">上传模板</button>
+          <button class="tab" data-tab="library" data-i18n="tab.library">我的模板库</button>
         </div>
         <div class="tab-body" id="tab-builtin"><div class="tpl-grid" id="builtin-list"></div></div>
         <div class="tab-body" id="tab-upload" hidden>
           <div class="option-card" id="tpl-upload-card">
-            <div class="oc-title">上传模板文件</div>
-            <div class="oc-desc">支持 .docx / .xlsx</div>
+            <div class="oc-title" data-i18n="s1.upTplTitle">上传模板文件</div>
+            <div class="oc-desc" data-i18n="s1.upTplDesc">支持 .docx / .xlsx</div>
             <input type="file" id="tpl-file" accept=".docx,.xlsx" hidden>
           </div>
         </div>
         <div class="tab-body" id="tab-library" hidden><div id="library-list"></div></div>
         <div id="tpl-analysis"></div>
         <div id="tpl-save-area" hidden>
-          <label><input type="checkbox" id="tpl-save-check"> 保存到"我的模板库"</label>
-          <div id="tpl-save-name" hidden><input type="text" id="tpl-name" placeholder="模板名称，如：专项培训签到表"></div>
+          <label><input type="checkbox" id="tpl-save-check"><span data-i18n="s1.saveLib"> 保存到"我的模板库"</span></label>
+          <div id="tpl-save-name" hidden><input type="text" id="tpl-name" data-i18n-ph="s1.tplNamePh" placeholder="模板名称，如：专项培训签到表"></div>
         </div>
       </div>
     </div>
@@ -64,88 +67,88 @@
 
   <!-- 第2步 判重 -->
   <section class="panel" id="step-dedup" hidden>
-    <h2>② 重复项核对</h2>
-    <p class="hint">判定标准：姓名 + 班组 + 身份证号码 + 联系电话（名单里有哪项就比哪项）<b>全部相同</b>才判为重复。每组默认保留第一条，其余标为"重复"；可逐条改判。</p>
+    <h2 data-i18n="s2.title">② 重复项核对</h2>
+    <p class="hint" data-i18n="s2.hint">判定标准：姓名 + 班组 + 身份证号码 + 联系电话（名单里有哪项就比哪项）<b>全部相同</b>才判为重复。每组默认保留第一条，其余标为"重复"；可逐条改判。</p>
     <div id="dup-groups"></div>
     <div class="actions">
-      <button onclick="gotoStep('input')">← 上一步</button>
-      <button id="dedup-next" class="primary">确认，下一步 →</button>
+      <button id="back-input" data-i18n="btn.back">← 上一步</button>
+      <button id="dedup-next" class="primary" data-i18n="btn.confirmNext">确认，下一步 →</button>
     </div>
   </section>
 
   <!-- 第3步 名单字段 -->
   <section class="panel" id="step-fields" hidden>
-    <h2>③ 名单字段用途</h2>
-    <p class="hint">为名单的每一列指定用途：<b>自动填入</b>（逐人写入签到表）、<b>分类基础</b>（按该列取值拆分成多份签到表，可不选）、<b>排除依据</b>（该列等于指定值的行不参与）、<b>不使用</b>。</p>
+    <h2 data-i18n="s3.title">③ 名单字段用途</h2>
+    <p class="hint" data-i18n="s3.hint">为名单的每一列指定用途：<b>自动填入</b>（逐人写入签到表）、<b>分类基础</b>（按该列取值拆分成多份签到表，可不选）、<b>排除依据</b>（该列等于指定值的行不参与）、<b>不使用</b>。</p>
     <div id="field-maps"></div>
-    <h3>分类归并规则（可选，作用于"分类基础"的取值）</h3>
+    <h3 data-i18n="s3.mergeTitle">分类归并规则（可选，作用于"分类基础"的取值）</h3>
     <div id="merge-rules"></div>
-    <button onclick="addMergeRule()" class="small">＋ 加一条归并规则</button>
+    <button id="add-merge" class="small" data-i18n="btn.addMerge">＋ 加一条归并规则</button>
     <div class="actions">
-      <button onclick="gotoStep('dedup')">← 上一步</button>
-      <button id="fields-next" class="primary">下一步：对应关系 →</button>
+      <button id="back-dedup" data-i18n="btn.back">← 上一步</button>
+      <button id="fields-next" class="primary" data-i18n="btn.nextMapping">下一步：对应关系 →</button>
     </div>
   </section>
 
   <!-- 第4步 对应关系 -->
   <section class="panel" id="step-mapping" hidden>
-    <h2>④ 字段对应关系</h2>
-    <p class="hint">上半部分：把名单字段映射到模板数据区的列（生成时逐人填入）；下半部分：为模板信息字段指定来源。</p>
-    <h3>数据区列映射</h3>
+    <h2 data-i18n="s4.title">④ 字段对应关系</h2>
+    <p class="hint" data-i18n="s4.hint">上半部分：把名单字段映射到模板数据区的列（生成时逐人填入）；下半部分：为模板信息字段指定来源。</p>
+    <h3 data-i18n="s4.mapTitle">数据区列映射</h3>
     <div id="mapping-list"></div>
-    <h3>模板信息字段</h3>
+    <h3 data-i18n="s4.designTitle">模板信息字段</h3>
     <div id="design-list"></div>
     <div class="actions">
-      <button onclick="gotoStep('fields')">← 上一步</button>
-      <button id="mapping-next" class="primary">下一步：填写信息 →</button>
+      <button id="back-fields" data-i18n="btn.back">← 上一步</button>
+      <button id="mapping-next" class="primary" data-i18n="btn.nextFill">下一步：填写信息 →</button>
     </div>
   </section>
 
   <!-- 第5步 填写 -->
   <section class="panel" id="step-fill" hidden>
-    <h2>⑤ 填写签到信息</h2>
-    <p class="hint">以下为"用户填写"来源的字段，留空的不会写入签到表。</p>
+    <h2 data-i18n="s5.title">⑤ 填写签到信息</h2>
+    <p class="hint" data-i18n="s5.hint">以下为"用户填写"来源的字段，留空的不会写入签到表。</p>
     <div id="fill-form"></div>
     <div class="actions">
-      <button onclick="backToPrev()">← 上一步</button>
-      <button id="gen-btn" class="primary">生成并预览 ↗</button>
+      <button id="back-mapping" data-i18n="btn.back">← 上一步</button>
+      <button id="gen-btn" class="primary" data-i18n="btn.gen">生成并预览 ↗</button>
     </div>
   </section>
 
   <!-- 第6步 预览 -->
   <section class="panel" id="step-preview" hidden>
-    <h2>⑥ 预览</h2>
+    <h2 data-i18n="s6.title">⑥ 预览</h2>
     <div id="preview-summary"></div>
     <div id="preview-list"></div>
     <div class="actions">
-      <button onclick="gotoStep('fill')">← 上一步（修改填写）</button>
-      <button id="to-output" class="primary">下一步：输出 →</button>
+      <button id="back-fill" data-i18n="btn.backFill">← 上一步（修改填写）</button>
+      <button id="to-output" class="primary" data-i18n="btn.nextOutput">下一步：输出 →</button>
     </div>
   </section>
 
   <!-- 第7步 输出 -->
   <section class="panel" id="step-output" hidden>
-    <h2>⑦ 输出</h2>
+    <h2 data-i18n="s7.title">⑦ 输出</h2>
     <div id="output-summary"></div>
     <div id="output-list"></div>
     <div class="actions">
-      <button id="redo-btn">重做</button>
-      <a id="dl-all" class="button" href="#" download>打包下载全部（zip）</a>
-      <button id="to-catout" class="primary" hidden>下一步：分类输出 →</button>
-      <button id="finish-btn" class="primary" hidden>完成</button>
-      <button id="cancel-btn" class="danger">取消</button>
+      <button id="redo-btn" data-i18n="btn.redo">重做</button>
+      <a id="dl-all" class="button" href="#" download data-i18n="btn.dlAll">打包下载全部（zip）</a>
+      <button id="to-catout" class="primary" hidden data-i18n="btn.nextCat">下一步：分类输出 →</button>
+      <button id="finish-btn" class="primary" hidden data-i18n="btn.finish">完成</button>
+      <button id="cancel-btn" class="danger" data-i18n="btn.cancel">取消</button>
     </div>
   </section>
 
   <!-- 第8步 分类输出 -->
   <section class="panel" id="step-catout" hidden>
-    <h2>⑧ 分类输出</h2>
-    <p class="hint">按第③步选择的"分类基础"分组输出。每个分类可单独打包下载。</p>
+    <h2 data-i18n="s8.title">⑧ 分类输出</h2>
+    <p class="hint" data-i18n="s8.hint">按第③步选择的"分类基础"分组输出。每个分类可单独打包下载。</p>
     <div id="catout-list"></div>
     <div class="actions">
-      <button onclick="gotoStep('output')">← 上一步</button>
-      <a id="dl-all2" class="button" href="#" download>打包下载全部（zip）</a>
-      <button id="finish-btn2" class="primary">完成</button>
+      <button id="back-output" data-i18n="btn.back">← 上一步</button>
+      <a id="dl-all2" class="button" href="#" download data-i18n="btn.dlAll">打包下载全部（zip）</a>
+      <button id="finish-btn2" class="primary" data-i18n="btn.finish">完成</button>
     </div>
   </section>
 </main>
@@ -153,12 +156,12 @@
 <!-- 重做弹窗 -->
 <div class="modal-mask" id="redo-modal" hidden>
   <div class="modal">
-    <h3>重做签到表</h3>
-    <p>是否要更换名单和模板？</p>
+    <h3 data-i18n="redo.title">重做签到表</h3>
+    <p data-i18n="redo.q">是否要更换名单和模板？</p>
     <div class="modal-actions">
-      <button onclick="redoNew()">上传新的名单和模板（全新一轮）</button>
-      <button onclick="redoKeep()" class="primary">使用之前的名单和模板（从第①步开始）</button>
-      <button onclick="closeRedo()">返回</button>
+      <button id="redo-new" data-i18n="redo.new">上传新的名单和模板（全新一轮）</button>
+      <button id="redo-keep" class="primary" data-i18n="redo.keep">使用之前的名单和模板（从第①步开始）</button>
+      <button id="redo-back" data-i18n="redo.back">返回</button>
     </div>
   </div>
 </div>
@@ -168,16 +171,17 @@
   <div class="modal modal-wide">
     <div class="pv-modal-head">
       <span id="tpl-preview-title">模板预览</span>
-      <button class="small" id="tpl-preview-close">✕ 关闭</button>
+      <button class="small" id="tpl-preview-close" data-i18n="btn.close">✕ 关闭</button>
     </div>
     <div class="pv-body" id="tpl-preview-body"></div>
     <div class="pv-modal-foot">
-      <button id="tpl-preview-use" class="primary">用这个模板 →</button>
+      <button id="tpl-preview-use" class="primary" data-i18n="btn.useTpl">用这个模板 →</button>
     </div>
   </div>
 </div>
 
 <div id="toast" hidden></div>
+<script>window.APP_MODE='__APP_MODE__';</script>
 <script src="app.js"></script>
 </body>
 </html>
