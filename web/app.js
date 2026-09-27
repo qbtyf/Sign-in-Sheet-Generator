@@ -44,9 +44,11 @@ async function initI18n() {
   if ($("input-next")) refreshInputNext();
   gotoStep(S.current);
 }
+let biTouched = false; // 用户在第⑤步手动改过语言组合后，切界面语言不再覆盖
 function switchLang(lang) {
   CUR_LANG = lang;
   localStorage.setItem("appLang", lang);
+  if (!biTouched) S.biLang = { l1: lang, l2: lang === "zh-CN" ? "en" : "zh-CN" };
   initI18n().then(() => {
     // 重渲染已显示的动态区域（静态 data-i18n 文案已由 applyI18n 刷新）
     loadTemplateLists();
@@ -76,6 +78,10 @@ const S = {
   hasCat: false,
   outputs: [],
   fillFields: [],    // 第③步勾选自动填入的字段名（全表合并去重）
+  biLang: {          // V3.0 双语输出语言组合（默认：界面语言 + 中文；界面为中文时 = 中文+英语）
+    l1: CUR_LANG === "zh-CN" ? "zh-CN" : CUR_LANG,
+    l2: CUR_LANG === "zh-CN" ? "en" : "zh-CN",
+  },
 };
 
 // ---------------------------------------------------------------- 工具
@@ -305,7 +311,8 @@ async function openTplPreview(id, name, card) {
   $("tpl-preview-modal").hidden = false;
   try {
     const url = id ? "/api/template/preview?id=" + encodeURIComponent(id) : "/api/template/preview";
-    const resp = await fetch(url);
+    const biQ = "&lang1=" + encodeURIComponent(S.biLang.l1) + "&lang2=" + encodeURIComponent(S.biLang.l2);
+    const resp = await fetch(url + biQ);
     if (!resp.ok) throw new Error((await resp.json()).error || t("s6.pvFail"));
     body.innerHTML = await resp.text();
   } catch (err) {
@@ -673,6 +680,21 @@ function dynInput(placeholder, max) {
 function renderFillForm() {
   const box = $("fill-form");
   box.innerHTML = "";
+  // 双语输出语言组合（V3.0，仅内置模板支持）
+  if (S.tplSource === "builtin" && S.tpl && S.tpl.kind === "docx") {
+    const row = document.createElement("div");
+    row.className = "form-row";
+    const opts = cur => LANGS.map(([code, name]) =>
+      `<option value="${code}"${code === cur ? " selected" : ""}>${esc(name)}</option>`).join("");
+    row.innerHTML = `<label>${esc(t("s5.biTitle"))}</label>
+      <div><select id="bi-lang1">${opts(S.biLang.l1)}</select>
+      <b style="margin:0 6px;">/</b>
+      <select id="bi-lang2">${opts(S.biLang.l2)}</select>
+      <span class="hint">${esc(t("s5.biHint"))}</span></div>`;
+    box.appendChild(row);
+    row.querySelector("#bi-lang1").onchange = e => { S.biLang.l1 = e.target.value; biTouched = true; };
+    row.querySelector("#bi-lang2").onchange = e => { S.biLang.l2 = e.target.value; biTouched = true; };
+  }
   const fillable = S.fields.filter(f => f.mode === "fill");
   if (!fillable.length) box.innerHTML = `<p class='hint'>${esc(t("s5.none"))}</p>`;
   fillable.forEach(f => {
@@ -752,7 +774,10 @@ $("gen-btn").onclick = async () => {
   const btn = $("gen-btn");
   btn.disabled = true; btn.textContent = t("btn.genBusy");
   try {
-    const data = await post("/api/generate", { fill, capacity: cap });
+    const data = await post("/api/generate", {
+      fill, capacity: cap,
+      bilingual: { lang1: S.biLang.l1, lang2: S.biLang.l2 },
+    });
     S.outputs = data.outputs || [];
     S.hasCat = !!data.hasCat;
     renderPreview();

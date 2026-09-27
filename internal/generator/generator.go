@@ -12,6 +12,7 @@ import (
 
 	"github.com/xuri/excelize/v2"
 
+	"signsheet/internal/bilingual"
 	"signsheet/internal/docx"
 	"signsheet/internal/tplengine"
 )
@@ -35,11 +36,19 @@ type Group struct {
 	Persons []PersonRow
 }
 
+// Bilingual 双语输出设置（V3.0，nil = 单语输出）
+type Bilingual struct {
+	Dict  bilingual.Dict // 标签词典（中文原文 → 语言 → 译文）
+	Lang1 string         // 语言1（zh-CN = 保留中文原文）
+	Lang2 string         // 语言2
+}
+
 // PartOpts 一张签到表的填写选项
 type PartOpts struct {
 	Fill    map[string]string // 字段值（键=字段名；同时覆盖占位符与留空字段）
 	Persons []PersonRow       // 本张人员
 	Maps    []ColMap          // 数据区列映射（非空 = 每行一人模式）
+	Bi      *Bilingual        // 双语设置（仅内置 docx 模板生效）
 }
 
 // PartInfo 一张输出文件的信息
@@ -99,6 +108,12 @@ func GenDocxPart(tplPath, outPath string, a *tplengine.Analysis, o PartOpts) (in
 		return 0, err
 	}
 	xmlStr := string(xmlBytes)
+
+	// 0. 双语标签替换（V3.0）：必须先于占位符替换——
+	//    占位符 {议题} 含 {} 会被词典匹配跳过，不会被误改；填入的用户数据此时尚未写入
+	if o.Bi != nil {
+		xmlStr = bilingual.Apply(xmlStr, o.Bi.Dict, o.Bi.Lang1, o.Bi.Lang2)
+	}
 
 	// 1. 替换 {占位符}（留空字段名不会出现在占位符里，无副作用）
 	xmlStr = docx.ReplacePlaceholders(xmlStr, o.Fill)
@@ -345,8 +360,9 @@ func GenXlsxPart(tplPath, outPath string, a *tplengine.Analysis, o PartOpts) (in
 	return filled, nil
 }
 
-// GenGroup 生成一个分类的全部签到表（自动拆分），返回每张文件信息
-func GenGroup(tplPath, outDir string, a *tplengine.Analysis, g Group, capacity int, fill map[string]string, maps []ColMap) ([]PartInfo, error) {
+// GenGroup 生成一个分类的全部签到表（自动拆分），返回每张文件信息。
+// bi 非 nil 且模板为 docx 时输出双语标签（仅内置模板由 server 传入）。
+func GenGroup(tplPath, outDir string, a *tplengine.Analysis, g Group, capacity int, fill map[string]string, maps []ColMap, bi *Bilingual) ([]PartInfo, error) {
 	if capacity <= 0 || capacity > a.Capacity {
 		capacity = a.Capacity
 	}
@@ -364,6 +380,9 @@ func GenGroup(tplPath, outDir string, a *tplengine.Analysis, g Group, capacity i
 	for pi, ps := range parts {
 		out := OutputPath(outDir, title, g.Name, pi+1, len(parts), a.Kind)
 		opts := PartOpts{Fill: fill, Persons: ps, Maps: maps}
+		if a.Kind == "docx" {
+			opts.Bi = bi // xlsx 模板不支持双语（内置模板均为 docx）
+		}
 		var (
 			n   int
 			err error

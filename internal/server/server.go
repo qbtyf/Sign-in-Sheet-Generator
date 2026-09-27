@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"signsheet/internal/bilingual"
 	"signsheet/internal/docx"
 	"signsheet/internal/generator"
 	"signsheet/internal/preview"
@@ -63,10 +64,13 @@ type Session struct {
 	MergeRules [][2]string
 	Removed    map[string]map[int]bool // sheetKey -> 行号(0基,数据行) -> 删除
 
-	TplPath string
-	Tpl     *tplengine.Analysis
-	Design  []FieldDesign
-	Mapping []generator.ColMap // 数据区列 ← 名单字段
+	TplPath   string
+	Tpl       *tplengine.Analysis
+	Design    []FieldDesign
+	Mapping   []generator.ColMap // 数据区列 ← 名单字段
+	TplSource string             // builtin | upload | library（双语替换仅对 builtin 生效）
+	BiLang1   string             // 双语输出语言1（空 = 单语）
+	BiLang2   string             // 双语输出语言2
 
 	OutDir   string
 	Outputs  []generator.PartInfo
@@ -109,6 +113,19 @@ var builtinFS fs.FS
 
 // SetBuiltinFS 注入内嵌模板文件系统（根目录即 builtins/）
 func SetBuiltinFS(f fs.FS) { builtinFS = f }
+
+// biDict 双语标签词典（V3.0，启动时从 locales 加载一次）
+var biDict bilingual.Dict
+
+// SetLocaleFS 注入语言包文件系统（根目录即 locales/），并加载双语词典
+func SetLocaleFS(f fs.FS) {
+	d, err := bilingual.Load(f)
+	if err != nil {
+		fmt.Println("双语词典加载失败（双语功能不可用）:", err)
+		return
+	}
+	biDict = d
+}
 
 // ListBuiltins 列出内置模板
 func ListBuiltins() []string {
@@ -711,6 +728,7 @@ func handleTemplateUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ss.TplPath, ss.Tpl, ss.Design, ss.Outputs = path, a, fields, nil
+	ss.TplSource = "upload"
 	writeJSON(w, map[string]any{"analysis": a, "fields": fields})
 }
 
@@ -740,6 +758,7 @@ func handleTemplateBuiltin(w http.ResponseWriter, r *http.Request) {	ss := sessi
 		return
 	}
 	ss.TplPath, ss.Tpl, ss.Design, ss.Outputs = path, a, fields, nil
+	ss.TplSource = "builtin"
 	writeJSON(w, map[string]any{"analysis": a, "fields": fields})
 }
 
@@ -748,11 +767,22 @@ var reTplPlaceholder = regexp.MustCompile(`\{[^<>{}]*\}`)
 
 // handleTemplatePreview 模板预览：?id=<内置模板文件名> 预览内置模板；无 id 则预览当前已选模板
 // 预览为"最终输出状态"模拟：占位符清空、数据区保持空白，完整显示信息表＋签到网格
+// 双语（V3.0）：?lang1=&lang2= 指定输出语言组合（仅内置模板生效）；
+// 无 query 参数时回退到会话保存的语言组合（同样仅 builtin）
 func handleTemplatePreview(w http.ResponseWriter, r *http.Request) {
 	var (
 		htmlStr string
 		err     error
 	)
+	// 双语语言组合：query 优先，其次会话保存值（仅 builtin）
+	l1, l2 := r.URL.Query().Get("lang1"), r.URL.Query().Get("lang2")
+	applyBi := func(src string, isBuiltin bool) string {
+		xml := src
+		if biDict != nil && isBuiltin && l1 != "" && l2 != "" && l1 != l2 {
+			xml = bilingual.Apply(xml, biDict, l1, l2)
+		}
+		return reTplPlaceholder.ReplaceAllString(xml, "")
+	}
 	if id := r.URL.Query().Get("id"); id != "" {
 		if strings.Contains(id, "..") || strings.Contains(id, "/") || strings.Contains(id, "\\") {
 			writeErr(w, 400, "非法模板名")
@@ -768,11 +798,12 @@ func handleTemplatePreview(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 500, err.Error())
 			return
 		}
-		htmlStr, err = preview.DocxFromXML(reTplPlaceholder.ReplaceAllString(string(b), ""))
+		htmlStr, err = preview.DocxFromXML(applyBi(string(b), true))
 	} else {
 		ss := sessions.get(w, r)
 		ss.mu.Lock()
 		path := ss.TplPath
+		src, bl1, bl2 := ss.TplSource, ss.BiLang1, ss.BiLang2
 		ss.mu.Unlock()
 		if path == "" {
 			writeErr(w, 400, "尚未选择模板")
@@ -786,7 +817,10 @@ func handleTemplatePreview(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, 500, e.Error())
 				return
 			}
-			htmlStr, err = preview.DocxFromXML(reTplPlaceholder.ReplaceAllString(string(b), ""))
+			if l1 == "" && src == "builtin" {
+				l1, l2 = bl1, bl2 // 回退会话语言组合
+			}
+			htmlStr, err = preview.DocxFromXML(applyBi(string(b), src == "builtin"))
 		}
 	}
 	if err != nil {
@@ -825,6 +859,7 @@ func handleTemplateLibraryLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ss.TplPath, ss.Tpl, ss.Outputs = tplPath, a, nil
+	ss.TplSource = "library"
 	if design, err := store.LoadDesign(req.Name, req.Kind); err == nil {
 		json.Unmarshal(design, &fields)
 	}
@@ -878,8 +913,12 @@ func handleTemplateSave(w http.ResponseWriter, r *http.Request) {
 func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	ss := sessions.get(w, r)
 	var req struct {
-		Fill     map[string]string `json:"fill"`
-		Capacity int               `json:"capacity"`
+		Fill      map[string]string `json:"fill"`
+		Capacity  int               `json:"capacity"`
+		Bilingual struct {
+			Lang1 string `json:"lang1"`
+			Lang2 string `json:"lang2"`
+		} `json:"bilingual"`
 	}
 	if err := readBody(r, &req); err != nil {
 		writeErr(w, 400, "请求格式错误")
@@ -890,6 +929,13 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	if ss.Tpl == nil {
 		writeErr(w, 400, "请先选择模板")
 		return
+	}
+	// 双语输出（V3.0）：仅内置模板生效；语言相同视为单语
+	ss.BiLang1, ss.BiLang2 = req.Bilingual.Lang1, req.Bilingual.Lang2
+	var bi *generator.Bilingual
+	if ss.TplSource == "builtin" && biDict != nil &&
+		ss.BiLang1 != "" && ss.BiLang2 != "" && ss.BiLang1 != ss.BiLang2 {
+		bi = &generator.Bilingual{Dict: biDict, Lang1: ss.BiLang1, Lang2: ss.BiLang2}
 	}
 
 	var groups []generator.Group
@@ -939,7 +985,7 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 			first = g.Persons[0]
 		}
 		fill := computeFill(req.Fill, design, len(g.Persons), first)
-		infos, err := generator.GenGroup(ss.TplPath, outDir, ss.Tpl, g, req.Capacity, fill, maps)
+		infos, err := generator.GenGroup(ss.TplPath, outDir, ss.Tpl, g, req.Capacity, fill, maps, bi)
 		if err != nil {
 			writeErr(w, 500, err.Error())
 			return
@@ -1085,11 +1131,23 @@ func handleReset(w http.ResponseWriter, r *http.Request) {
 	ss := sessions.get(w, r)
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
-	keepDir := ss.Dir
-	*ss = Session{ID: ss.ID, Dir: keepDir}
+	// 🔴 严禁 *ss = Session{...} 整体覆盖：Session 内嵌 sync.Mutex，
+	// 覆盖会把"已锁上的锁"替换成零值锁，defer Unlock 解到没锁过的锁 →
+	// 运行时致命错误 sync: unlock of unlocked mutex → 整个进程无声退出。
+	// 必须逐字段清空（ID 与工作目录 Dir 保留）
+	keepID, keepDir := ss.ID, ss.Dir
+	ss.ID, ss.Dir = keepID, keepDir
+	ss.NoRoster = false
+	ss.RosterPath, ss.RosterKind = "", ""
+	ss.Sheets, ss.Chosen = nil, nil
 	ss.HeaderRows = map[string]int{}
+	ss.Tables = nil
 	ss.Role = map[string]Role{}
+	ss.MergeRules = nil
 	ss.Removed = map[string]map[int]bool{}
+	ss.TplPath, ss.Tpl, ss.Design, ss.Mapping = "", nil, nil, nil
+	ss.TplSource, ss.BiLang1, ss.BiLang2 = "", "", ""
+	ss.OutDir, ss.Outputs = "", nil
 	writeJSON(w, map[string]any{"ok": true})
 }
 

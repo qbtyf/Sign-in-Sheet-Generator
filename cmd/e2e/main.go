@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"signsheet/internal/bilingual"
 	"signsheet/internal/docx"
 	"signsheet/internal/generator"
 	"signsheet/internal/roster"
@@ -106,7 +107,7 @@ func main() {
 
 	var allParts []generator.PartInfo
 	for _, g := range groups {
-		infos, err := generator.GenGroup(tmplDocx, outDir, a, g, 0, nil, nil)
+		infos, err := generator.GenGroup(tmplDocx, outDir, a, g, 0, nil, nil, nil)
 		must(err, "生成 "+g.Name)
 		allParts = append(allParts, infos...)
 	}
@@ -150,7 +151,7 @@ func main() {
 	gB := generator.Group{Name: "测试班", Persons: []generator.PersonRow{
 		{Name: "张三"}, {Name: "李四"}, {Name: "王五"},
 	}}
-	infos, err := generator.GenGroup(tplPath, outDir, b, gB, 0, fill, nil)
+	infos, err := generator.GenGroup(tplPath, outDir, b, gB, 0, fill, nil, nil)
 	must(err, "生成内置模板签到表")
 	n, dup := verifyDocx(filepath.Join(outDir, infos[0].File))
 	if n != 3 || dup {
@@ -209,7 +210,7 @@ func main() {
 	gD := generator.Group{Name: "", Persons: []generator.PersonRow{
 		{Name: "赵一"}, {Name: "钱二"}, {Name: "孙三"}, {Name: "李四"}, {Name: "周五"},
 	}}
-	infosD, err := generator.GenGroup(classicPath, outDir, c, gD, 0, fillD, nil)
+	infosD, err := generator.GenGroup(classicPath, outDir, c, gD, 0, fillD, nil, nil)
 	must(err, "生成经典表单签到表")
 	nD, dupD := verifyDocx(filepath.Join(outDir, infosD[0].File))
 	if nD != 5 || dupD {
@@ -243,12 +244,47 @@ func main() {
 		{Name: "李四", Vals: map[string]string{"单位": "乙班"}},
 		{Name: "王五", Vals: map[string]string{"单位": "丙班"}},
 	}}
-	infosE, err := generator.GenGroup(tplPath, outDir, b, gE, 0, fill, maps)
+	infosE, err := generator.GenGroup(tplPath, outDir, b, gE, 0, fill, maps, nil)
 	must(err, "生成映射签到表")
 	verifyMappedCells(filepath.Join(outDir, infosE[0].File), b, maps, []string{"张三", "李四", "王五"}, []string{"甲班", "乙班", "丙班"})
 	fmt.Printf("  ✅ 场景E通过: %d 人逐行填入，姓名列+映射列(单位) 全部正确\n", len(gE.Persons))
 
-	fmt.Println("\n===== 🎉 全部 e2e 测试通过（V2） =====")
+	// ---------- 场景F：双语签到表输出（V3.0） ----------
+	fmt.Println("\n--- 场景F：双语签到表（中+英 / 英+法） ---")
+	dict, err := bilingual.Load(os.DirFS("web/locales"))
+	must(err, "加载双语词典")
+	// 组合1：中文 + 英语
+	infosF, err := generator.GenGroup(tplPath, outDir, b, gB, 0, fill, nil,
+		&generator.Bilingual{Dict: dict, Lang1: "zh-CN", Lang2: "en"})
+	must(err, "生成中英双语签到表")
+	xmlF := readDocXML(filepath.Join(outDir, infosF[0].File))
+	for _, need := range []string{"培训内容 / Training Content", "序号 / No.", "姓名 / Name", "地点 / Location", "时间 / Time"} {
+		if !strings.Contains(xmlF, need) {
+			fail("中英双语缺: " + need)
+		}
+	}
+	// 组合2：英语 + 法语（不含中文，标签原文不得残留）
+	infosF2, err := generator.GenGroup(tplPath, outDir, b, gE, 0, fill, nil,
+		&generator.Bilingual{Dict: dict, Lang1: "en", Lang2: "fr"})
+	must(err, "生成英法双语签到表")
+	xmlF2 := readDocXML(filepath.Join(outDir, infosF2[0].File))
+	for _, need := range []string{"Training Content / Contenu de la formation", "Location / Lieu", "No. / N°"} {
+		if !strings.Contains(xmlF2, need) {
+			fail("英法双语缺: " + need)
+		}
+	}
+	for _, leftover := range []string{">议题<", ">培训内容<", ">地点<", ">序号<"} {
+		if strings.Contains(xmlF2, leftover) {
+			fail("英法组合残留中文标签原文: " + leftover)
+		}
+	}
+	// 数据内容（用户填写的中文值）应保持原样
+	if !strings.Contains(xmlF2, "测试培训") {
+		fail("英法组合误伤数据内容（测试培训丢失）")
+	}
+	fmt.Println("  ✅ 场景F通过: 中+英、英+法双语标签替换正确，数据内容保持原样")
+
+	fmt.Println("\n===== 🎉 全部 e2e 测试通过（V3.0） =====")
 }
 
 func readDocXML(path string) string {

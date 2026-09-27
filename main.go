@@ -7,11 +7,13 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"runtime"
 	"strings"
 	"time"
@@ -36,11 +38,30 @@ var curWebView webview2.WebView
 var appMode = "browser"
 
 func main() {
+	diagFile := initDiagLog()
+	if diagFile != nil {
+		defer diagFile.Close()
+	}
+	log.Printf("==== 启动 ====")
+
+	// 主流程崩溃兜底：panic 记入诊断日志后再按原样崩溃（运行时致命错误无法拦截，属已知限制）
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("主流程崩溃: %v\n%s", r, debug.Stack())
+			panic(r)
+		}
+	}()
+
 	webSub, err := fs.Sub(webFS, "web")
 	if err != nil {
 		panic(err)
 	}
 	server.SetBuiltinFS(builtinFS)
+	localesSub, err := fs.Sub(webFS, "web/locales")
+	if err != nil {
+		panic(err)
+	}
+	server.SetLocaleFS(localesSub)
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /", staticHandler(webSub))
@@ -50,6 +71,7 @@ func main() {
 	mux.HandleFunc("GET /api/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, "<!DOCTYPE html><html lang=\"zh\"><head><meta charset=\"UTF-8\"><title>已退出</title></head><body style=\"font-family:sans-serif;text-align:center;padding-top:80px;color:#444\"><h2>通用签到表生成器已退出。</h2><p>本页面已失效，可以直接关闭。</p></body></html>")
+		log.Printf("收到退出请求（/api/shutdown）")
 		go func() {
 			time.Sleep(500 * time.Millisecond)
 			gracefulExit()
@@ -72,17 +94,21 @@ func main() {
 	if w, ok := newWebViewSafe(); ok {
 		curWebView = w
 		appMode = "webview"
+		log.Printf("运行模式: webview 内嵌窗口, 地址: %s", url)
 		defer w.Destroy()
 		w.SetTitle("通用签到表生成器")
 		w.SetSize(1180, 800, webview2.HintNone)
 		go func() {
 			if err := http.Serve(ln, mux); err != nil {
+				log.Printf("本地服务异常退出: %v", err)
 				w.Dispatch(func() { w.Terminate() })
 			}
 		}()
 		waitReady(url)
 		w.Navigate(url)
+		log.Printf("消息循环启动")
 		w.Run() // 阻塞至窗口关闭 → main 返回 → 进程退出 → 服务随之结束
+		log.Printf("窗口已关闭，程序退出")
 		return
 	}
 
@@ -124,6 +150,30 @@ func gracefulExit() {
 		}()
 	}
 	os.Exit(0)
+}
+
+// initDiagLog 打开诊断日志（exe 同目录 诊断日志.txt，追加写入）。
+// 背景：exe 以 windowsgui 静默启动，没有控制台，panic/异常信息无处可看；
+// 该日志收集 Go 标准 log 输出（含 net/http 自动恢复的 handler panic 堆栈）
+// 与关键事件（启动/退出/服务异常），出问题时有据可查。
+// 超过 2MB 自动把旧文件改名为 诊断日志-旧.txt 重新开始，避免无限膨胀。
+// 注意：打开失败时静默降级（不影响正常使用）；Go 运行时致命错误（如数据竞争）
+// 直写系统 stderr，无法被本文件拦截，属已知限制。
+func initDiagLog() *os.File {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	path := filepath.Join(filepath.Dir(exe), "诊断日志.txt")
+	if info, err := os.Stat(path); err == nil && info.Size() > 2*1024*1024 {
+		_ = os.Rename(path, filepath.Join(filepath.Dir(exe), "诊断日志-旧.txt"))
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil
+	}
+	log.SetOutput(f)
+	return f
 }
 
 // newWebViewSafe 创建 WebView2 窗口；运行时缺失导致内部 panic 时恢复并返回 false。
