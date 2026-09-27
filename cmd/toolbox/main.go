@@ -23,6 +23,8 @@ import (
 
 	"github.com/jchv/go-webview2"
 
+	"signsheet/internal/pdfext"
+
 	"signsheet/internal/roster"
 	"signsheet/internal/tabfill"
 	"signsheet/internal/windialog"
@@ -212,8 +214,8 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ext := strings.ToLower(filepath.Ext(name))
-	if ext != ".xlsx" && ext != ".docx" {
-		writeErr(w, 400, "仅支持 .xlsx / .docx 文件（.doc/.xls 请先另存为新格式）")
+	if ext != ".xlsx" && ext != ".docx" && ext != ".pdf" {
+		writeErr(w, 400, "仅支持 .xlsx / .docx / .pdf 文件（.doc/.xls 请先另存为新格式）")
 		return
 	}
 
@@ -244,10 +246,26 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"path": saveName, "name": name, "sheets": sheets})
 }
 
-// listSheets 列出文件的数据源概要（xlsx=工作表 / docx=顶层表格）
+// listSheets 列出文件的数据源概要（xlsx=工作表 / docx=顶层表格 / pdf=每页概要）
 func listSheets(path string) ([]roster.SheetInfo, error) {
 	if strings.HasSuffix(strings.ToLower(path), ".xlsx") {
 		return roster.LoadXlsx(path)
+	}
+	if strings.HasSuffix(strings.ToLower(path), ".pdf") {
+		tables, err := pdfext.ListPDFTables(path)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]roster.SheetInfo, len(tables))
+		for i, t := range tables {
+			out[i] = roster.SheetInfo{
+				Key:       fmt.Sprintf("pdf:%d", t.Page),
+				Label:     fmt.Sprintf("第%d页（%d 行 × %d 列）", t.Page, t.Rows, t.Cols),
+				HeaderRow: 1,
+				Hidden:    false,
+			}
+		}
+		return out, nil
 	}
 	return roster.LoadDocx(path)
 }
@@ -638,7 +656,7 @@ type extractListRequest struct {
 	Path string `json:"path"`
 }
 
-// handleExtractList 列出 docx 里的全部表格（提取表格第①步）
+// handleExtractList 列出 docx / pdf 里的全部表格（提取表格第①步）
 func handleExtractList(w http.ResponseWriter, r *http.Request) {
 	var req extractListRequest
 	if err := readBody(r, &req); err != nil {
@@ -650,24 +668,34 @@ func handleExtractList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	if !strings.EqualFold(filepath.Ext(path), ".docx") {
-		writeErr(w, 400, "提取表格目前支持 Word（.docx）文件；PDF 提取将在 V1.5 提供")
-		return
+	switch {
+	case strings.EqualFold(filepath.Ext(path), ".pdf"):
+		tables, err := pdfext.ListPDFTables(path)
+		if err != nil {
+			log.Printf("PDF 提取表格清单失败: %v", err)
+			writeErr(w, 400, err.Error())
+			return
+		}
+		// PDF 的表格以页码标识（1 起），勾选时传页码数组
+		writeJSON(w, map[string]any{"kind": "pdf", "tables": tables})
+	case strings.EqualFold(filepath.Ext(path), ".docx"):
+		tables, err := tabfill.ListDocxTables(path)
+		if err != nil {
+			log.Printf("提取表格清单失败: %v", err)
+			writeErr(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"kind": "docx", "tables": tables})
+	default:
+		writeErr(w, 400, "提取表格支持 Word（.docx）与 PDF（.pdf）文件")
 	}
-	tables, err := tabfill.ListDocxTables(path)
-	if err != nil {
-		log.Printf("提取表格清单失败: %v", err)
-		writeErr(w, 400, err.Error())
-		return
-	}
-	writeJSON(w, map[string]any{"tables": tables})
 }
 
 // extractRequest /api/extract 请求体
 type extractRequest struct {
 	Path   string `json:"path"`
-	Tables []int  `json:"tables"` // 勾选的表格序号（0 基）
-	OutFmt string `json:"outFmt"` // ".docx" / ".xlsx"
+	Tables []int  `json:"tables"` // docx：表格序号（0 基）；pdf：页码（1 起）
+	OutFmt string `json:"outFmt"` // ".docx" / ".xlsx" / ".pdf"（仅 PDF 输入）
 }
 
 // handleExtract 执行提取，输出到 输出/ 目录，返回 {file, tables}
@@ -681,16 +709,12 @@ func handleExtract(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "请至少勾选一个要提取的表格")
 		return
 	}
-	if req.OutFmt != ".docx" && req.OutFmt != ".xlsx" {
+	if req.OutFmt != ".docx" && req.OutFmt != ".xlsx" && req.OutFmt != ".pdf" {
 		req.OutFmt = ".docx"
 	}
 	path, _, err := resolve(req.Path, "docx:0")
 	if err != nil {
 		writeErr(w, 400, err.Error())
-		return
-	}
-	if !strings.EqualFold(filepath.Ext(path), ".docx") {
-		writeErr(w, 400, "提取表格目前支持 Word（.docx）文件；PDF 提取将在 V1.5 提供")
 		return
 	}
 
@@ -699,6 +723,26 @@ func handleExtract(w http.ResponseWriter, r *http.Request) {
 	if _, err := os.Stat(outPath); err == nil { // 输出目录重名则加时间戳
 		outName = fmt.Sprintf("%s-%s%s", strings.TrimSuffix(outName, req.OutFmt), time.Now().Format("150405"), req.OutFmt)
 		outPath = filepath.Join(workDir, outSub, outName)
+	}
+
+	if strings.EqualFold(filepath.Ext(path), ".pdf") {
+		if req.OutFmt == ".pdf" && len(req.Tables) > 1 {
+			writeErr(w, 400, "PDF 原样输出一次只支持一个表格（一页）")
+			return
+		}
+		n, err := pdfext.ExtractPDFTables(path, req.Tables, req.OutFmt, outPath)
+		if err != nil {
+			log.Printf("PDF 提取失败: %v", err)
+			writeErr(w, 400, err.Error())
+			return
+		}
+		log.Printf("PDF 提取完成: %s（%d 个表格 → %s）", outName, n, req.OutFmt)
+		writeJSON(w, map[string]any{"file": outName, "tables": n})
+		return
+	}
+	if !strings.EqualFold(filepath.Ext(path), ".docx") {
+		writeErr(w, 400, "提取表格支持 Word（.docx）与 PDF（.pdf）文件")
+		return
 	}
 	if err := tabfill.ExtractDocx(path, outPath, req.OutFmt, req.Tables); err != nil {
 		log.Printf("提取失败: %v", err)

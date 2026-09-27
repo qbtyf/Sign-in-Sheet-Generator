@@ -1150,7 +1150,7 @@ function saveAllBtnHTML(files) {
 // 工具五：提取表格（V1.4：Word → Word 原样 / Excel）
 // ===========================================================================
 
-const EX = { path: '', name: '', tables: [], checked: {} };
+const EX = { path: '', name: '', kind: '', tables: [], checked: {} };
 
 $('file-extract').addEventListener('change', async (e) => {
   const f = e.target.files[0];
@@ -1165,6 +1165,7 @@ $('file-extract').addEventListener('change', async (e) => {
     const data = await api('/api/upload', { method: 'POST', body: fd });
     EX.path = data.path;
     EX.name = data.name;
+    EX.kind = /\.pdf$/i.test(data.name) ? 'pdf' : 'docx';
     const ld = await api('/api/extract/list', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1172,7 +1173,15 @@ $('file-extract').addEventListener('change', async (e) => {
     });
     EX.tables = ld.tables;
     EX.checked = {};
-    ld.tables.forEach((t) => { EX.checked[t.idx] = t.rows > 0; });
+    ld.tables.forEach((t) => {
+      const id = EX.kind === 'pdf' ? t.page : t.idx;
+      EX.checked[id] = EX.kind === 'pdf' ? true : t.rows > 0;
+    });
+    // PDF 原样输出选项仅 PDF 输入可用
+    $('extract-pdf-row').style.display = EX.kind === 'pdf' ? '' : 'none';
+    if (EX.kind !== 'pdf' && document.querySelector('input[name="extract-fmt"]:checked').value === '.pdf') {
+      document.querySelector('input[name="extract-fmt"][value=".docx"]').checked = true;
+    }
     $('fname-extract').textContent = data.name;
     $('detail-extract').classList.remove('hidden');
     renderExtractTables();
@@ -1182,24 +1191,29 @@ $('file-extract').addEventListener('change', async (e) => {
   }
 });
 
+function exId(t) { return EX.kind === 'pdf' ? t.page : t.idx; }
+
 function renderExtractTables() {
   const box = $('extract-tables');
   box.innerHTML = '';
   EX.tables.forEach((t) => {
+    const id = exId(t);
     const row = document.createElement('div');
-    row.className = 'inmerge-sheet' + (EX.checked[t.idx] ? ' checked' : '');
+    row.className = 'inmerge-sheet' + (EX.checked[id] ? ' checked' : '');
     const ck = document.createElement('label');
     ck.className = 'ck inmerge-ck';
     const box1 = document.createElement('input');
     box1.type = 'checkbox';
-    box1.checked = !!EX.checked[t.idx];
+    box1.checked = !!EX.checked[id];
     box1.addEventListener('change', () => {
-      EX.checked[t.idx] = box1.checked;
+      EX.checked[id] = box1.checked;
       renderExtractTables();
     });
     ck.appendChild(box1);
     const txt = document.createElement('span');
-    txt.textContent = '表格 ' + (t.idx + 1) + '（' + t.rows + ' 行 × ' + t.cols + ' 列）';
+    txt.textContent = EX.kind === 'pdf'
+      ? '第 ' + t.page + ' 页（' + t.rows + ' 行 × ' + t.cols + ' 列）'
+      : '表格 ' + (t.idx + 1) + '（' + t.rows + ' 行 × ' + t.cols + ' 列）';
     ck.appendChild(txt);
     row.appendChild(ck);
     if (t.preview && t.preview.length) {
@@ -1216,9 +1230,13 @@ function renderExtractTables() {
 $('btn-extract').addEventListener('click', async () => {
   clearErr();
   $('extract-result').classList.add('hidden');
-  const idxs = EX.tables.filter((t) => EX.checked[t.idx]).map((t) => t.idx);
-  if (!idxs.length) { showErr('请至少勾选一个要提取的表格'); return; }
+  const ids = EX.tables.filter((t) => EX.checked[exId(t)]).map(exId);
+  if (!ids.length) { showErr('请至少勾选一个要提取的表格'); return; }
   const fmt = document.querySelector('input[name="extract-fmt"]:checked').value;
+  if (fmt === '.pdf' && ids.length > 1) {
+    showErr('PDF 原样输出一次只支持一个表格（一页），请只勾选一页');
+    return;
+  }
 
   const btn = $('btn-extract');
   btn.disabled = true;
@@ -1227,7 +1245,7 @@ $('btn-extract').addEventListener('click', async () => {
     const data = await api('/api/extract', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: EX.path, tables: idxs, outFmt: fmt }),
+      body: JSON.stringify({ path: EX.path, tables: ids, outFmt: fmt }),
     });
     const box = $('extract-result');
     box.innerHTML = '<div class="ok-line">✅ 提取完成：' + data.tables + ' 个表格</div>'

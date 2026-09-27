@@ -47,7 +47,7 @@
     <div class="card available" data-tool="extract">
       <div class="card-icon">📤</div>
       <div class="card-title">提取表格</div>
-      <div class="card-desc">从 Word 文档里提取表格：导出 Word 可 100% 保留原格式，导出 Excel 保留合并格与列宽。PDF 提取将在 V1.5 提供。</div>
+      <div class="card-desc">从 Word / PDF 里提取表格：Word 可 100% 保留原格式；PDF 按网格重建，也可整页原样取出。输出 Word / Excel / PDF。</div>
       <div class="card-badge ok">可用</div>
     </div>
   </div>
@@ -274,11 +274,11 @@
 
   <div class="err hidden" id="err-extract"></div>
 
-  <!-- 第①步：上传 Word 文档 -->
+  <!-- 第①步：上传 Word / PDF 文档 -->
   <section class="panel">
-    <h3><span class="step-no">1</span> 上传 Word 文档 <small>（列出其中的全部表格，勾选要提取的；PDF 提取将在 V1.5 提供）</small></h3>
-    <label class="upload-btn">＋ 选择 docx 文件
-      <input type="file" id="file-extract" accept=".docx" hidden>
+    <h3><span class="step-no">1</span> 上传 Word / PDF 文档 <small>（列出其中的全部表格，勾选要提取的）</small></h3>
+    <label class="upload-btn">＋ 选择 docx / pdf 文件
+      <input type="file" id="file-extract" accept=".docx,.pdf" hidden>
     </label>
     <div class="src-detail hidden" id="detail-extract">
       <div class="field-row"><span class="fname" id="fname-extract"></span></div>
@@ -291,11 +291,15 @@
     <h3><span class="step-no">2</span> 输出格式</h3>
     <div class="field-row">
       <label class="ck"><input type="radio" name="extract-fmt" value=".docx" checked> Word（.docx）</label>
-      <span class="hint">勾选的表格原样搬运到新 Word 文档，格式 100% 保留</span>
+      <span class="hint">Word 输入：原样搬运，格式 100% 保留；PDF 输入：按网格重建表格</span>
     </div>
     <div class="field-row">
       <label class="ck"><input type="radio" name="extract-fmt" value=".xlsx"> Excel（.xlsx）</label>
-      <span class="hint">每个表格一个工作表，保留合并格、列宽、底纹；长数字不丢格式</span>
+      <span class="hint">每个表格一个工作表；长数字不丢格式</span>
+    </div>
+    <div class="field-row" id="extract-pdf-row">
+      <label class="ck"><input type="radio" name="extract-fmt" value=".pdf"> PDF（.pdf，原样）</label>
+      <span class="hint">仅 PDF 输入可用：把含表格的页原样取出，格式 100% 不变</span>
     </div>
     <button id="btn-extract" class="btn-primary" disabled>开始提取</button>
     <div id="extract-result" class="result hidden"></div>
