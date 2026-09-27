@@ -391,6 +391,7 @@ type mergeRequest struct {
 	Dedup     int               `json:"dedup"`     // 按总表字段下标判重，-1 不判重
 	BasePath  string            `json:"basePath"`  // 基准表文件（决定输出格式 xlsx/docx）
 	OutFmt    string            `json:"outFmt"`    // 可选：".xlsx"/".docx"，空 = 跟随基准表
+	InFile    bool              `json:"inFile"`    // true = 表格内合并：结果写回原文件（xlsx 加 Sheet / docx 文末加表格）
 }
 
 // handleMerge 多表合一：读各来源 → 引擎合并 → 按基准表格式输出
@@ -456,6 +457,42 @@ func handleMerge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 表格内合并：结果写回原文件（完整副本 + 追加合并结果），格式跟随原文件
+	if req.InFile {
+		baseName := filepath.Base(req.BasePath)
+		srcPath := filepath.Join(workDir, baseName)
+		if _, err := os.Stat(srcPath); err != nil {
+			writeErr(w, 400, "找不到原文件: "+baseName)
+			return
+		}
+		stem := baseName
+		if parts := strings.SplitN(stem, "-", 3); len(parts) == 3 {
+			stem = parts[2]
+		}
+		outName := stem
+		outPath := filepath.Join(workDir, outSub, outName)
+		if _, err := os.Stat(outPath); err == nil { // 输出目录重名则加时间戳
+			ext2 := filepath.Ext(stem)
+			outName = fmt.Sprintf("%s-%s%s", strings.TrimSuffix(stem, ext2), time.Now().Format("150405"), ext2)
+			outPath = filepath.Join(workDir, outSub, outName)
+		}
+		var sheetName string
+		if strings.EqualFold(filepath.Ext(srcPath), ".docx") {
+			err = tabfill.AppendDocxTable(srcPath, outPath, "合并总表", res.Headers, res.Rows)
+			sheetName = "合并总表（文末表格）"
+		} else {
+			sheetName, err = tabfill.AppendMergedSheet(srcPath, outPath, "合并总表", res.Headers, res.Rows)
+		}
+		if err != nil {
+			log.Printf("写回原文件失败: %v", err)
+			writeErr(w, 400, err.Error())
+			return
+		}
+		log.Printf("表格内合并完成: %s（%d 个来源，%d 行）", outName, len(srcs), len(res.Rows))
+		writeJSON(w, map[string]any{"file": outName, "rows": len(res.Rows), "inFile": true, "sheetName": sheetName})
+		return
+	}
+
 	ext := outExt(req.BasePath)
 	if req.OutFmt == ".xlsx" || req.OutFmt == ".docx" {
 		ext = req.OutFmt // 前端显式指定输出格式时优先
@@ -488,10 +525,11 @@ type splitRequest struct {
 	Path      string `json:"path"`
 	Key       string `json:"key"`
 	HeaderRow int    `json:"headerRow"`
-	Mode      string `json:"mode"`  // byValue / byRows
-	Field     int    `json:"field"` // byValue：拆分字段下标
-	Size      int    `json:"size"`  // byRows：每份行数
+	Mode      string `json:"mode"`   // byValue / byRows
+	Field     int    `json:"field"`  // byValue：拆分字段下标
+	Size      int    `json:"size"`   // byRows：每份行数
 	OutFmt    string `json:"outFmt"` // 输出格式 ".xlsx" / ".docx"，空 = 跟随输入
+	InFile    bool   `json:"inFile"` // true = 拆成单文件多工作表（Sheet），输出固定 xlsx
 }
 
 // handleSplit 拆分表格：读总表 → 引擎分组 → 逐份落盘，返回文件清单
@@ -519,6 +557,32 @@ func handleSplit(w http.ResponseWriter, r *http.Request) {
 	groups, err := tabfill.Split(spec)
 	if err != nil {
 		writeErr(w, 400, err.Error())
+		return
+	}
+
+	// 表格内拆分：所有组写进同一个 xlsx 的多个工作表（Sheet）
+	if req.InFile {
+		stem := strings.TrimSuffix(filepath.Base(req.Path), filepath.Ext(req.Path))
+		if parts := strings.SplitN(stem, "-", 3); len(parts) == 3 {
+			stem = parts[2]
+		}
+		outName := tabfill.SanitizeFileName(stem) + "-拆分.xlsx"
+		outPath := filepath.Join(workDir, outSub, outName)
+		if err := tabfill.WriteXlsxMultiSheet(tbl.Headers, groups, outPath); err != nil {
+			log.Printf("表格内拆分失败: %v", err)
+			writeErr(w, 400, err.Error())
+			return
+		}
+		type shInfo struct {
+			Name string `json:"name"`
+			Rows int    `json:"rows"`
+		}
+		sheets := make([]shInfo, 0, len(groups))
+		for _, g := range groups {
+			sheets = append(sheets, shInfo{Name: g.Name, Rows: len(g.Rows)})
+		}
+		log.Printf("表格内拆分完成: %s → %d 个工作表", stem, len(sheets))
+		writeJSON(w, map[string]any{"file": outName, "sheets": sheets, "rows": len(tbl.Rows)})
 		return
 	}
 

@@ -671,11 +671,20 @@ function renderSplitPreview(rows) {
   });
 }
 
+// 输出方式切换：单文件多 Sheet 时固定 xlsx，隐藏输出格式选择
+document.querySelectorAll('input[name="split-out"]').forEach((r) => {
+  r.addEventListener('change', () => {
+    const oneFile = document.querySelector('input[name="split-out"]:checked').value === 'onefile';
+    $('split-outfmt-row').classList.toggle('hidden', oneFile);
+  });
+});
+
 $('btn-split').addEventListener('click', async () => {
   clearErr();
   $('split-result').classList.add('hidden');
   if (!P.st) { showErr('请先上传总表'); return; }
   const mode = document.querySelector('input[name="split-mode"]:checked').value;
+  const oneFile = document.querySelector('input[name="split-out"]:checked').value === 'onefile';
   let field = 0, size = 0;
   if (mode === 'byValue') {
     field = parseInt($('split-field').value, 10);
@@ -694,20 +703,32 @@ $('btn-split').addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         path: P.st.path, key: P.st.key, headerRow: P.st.headerRow,
-        mode: mode, field: field, size: size, outFmt: $('split-outfmt').value,
+        mode: mode, field: field, size: size,
+        outFmt: oneFile ? '.xlsx' : $('split-outfmt').value,
+        inFile: oneFile,
       }),
     });
     const box = $('split-result');
-    let html = '<div class="ok-line">✅ 拆分完成：共 ' + data.files.length + ' 份</div>';
-    data.files.forEach((f) => {
-      html += '<div><a href="/api/download?name=' + encodeURIComponent(f.file) + '" download>' + escapeHtml(f.file) + '</a> <span class="muted">（' + f.rows + ' 行）</span></div>';
-    });
-    html += '<div style="margin-top:8px"><a id="btn-zip" class="btn-ghost" href="#">📦 打包下载全部（zip）</a></div>';
-    box.innerHTML = html;
-    const zipBtn = $('btn-zip');
-    const names = data.files.map((f) => f.file).join(',');
-    zipBtn.href = '/api/zip?names=' + encodeURIComponent(names);
-    zipBtn.setAttribute('download', '');
+    if (oneFile && data.sheets) {
+      // 单文件多 Sheet：一个下载链接 + 各工作表行数清单
+      let html = '<div class="ok-line">✅ 拆分完成：共 ' + data.sheets.length + ' 个工作表（Sheet），' + data.rows + ' 行数据</div>';
+      data.sheets.forEach((s) => {
+        html += '<div><span class="chip">' + escapeHtml(s.name) + '</span> <span class="muted">（' + s.rows + ' 行）</span></div>';
+      });
+      html += '<div style="margin-top:8px"><a class="btn-ghost" href="/api/download?name=' + encodeURIComponent(data.file) + '" download>📥 下载 ' + escapeHtml(data.file) + '</a></div>';
+      box.innerHTML = html;
+    } else {
+      let html = '<div class="ok-line">✅ 拆分完成：共 ' + data.files.length + ' 份</div>';
+      data.files.forEach((f) => {
+        html += '<div><a href="/api/download?name=' + encodeURIComponent(f.file) + '" download>' + escapeHtml(f.file) + '</a> <span class="muted">（' + f.rows + ' 行）</span></div>';
+      });
+      html += '<div style="margin-top:8px"><a id="btn-zip" class="btn-ghost" href="#">📦 打包下载全部（zip）</a></div>';
+      box.innerHTML = html;
+      const zipBtn = $('btn-zip');
+      const names = data.files.map((f) => f.file).join(',');
+      zipBtn.href = '/api/zip?names=' + encodeURIComponent(names);
+      zipBtn.setAttribute('download', '');
+    }
     box.classList.remove('hidden');
   } catch (err) {
     showErr(err.message);
@@ -1005,12 +1026,14 @@ $('btn-inmerge').addEventListener('click', async () => {
         sourceCol: $('inmerge-source-col').checked,
         dedup: dedup,
         basePath: IM.path,
-        outFmt: $('inmerge-outfmt').value,
+        inFile: true, // 表格内合并：结果写回原文件
       }),
     });
     const box = $('inmerge-result');
-    box.innerHTML = '<div class="ok-line">✅ 合并完成：' + srcs.length + ' 个工作表，共 ' + data.rows + ' 行数据</div>'
-      + '<a href="/api/download?name=' + encodeURIComponent(data.file) + '" download>下载 ' + escapeHtml(data.file) + '</a>';
+    const where = data.sheetName ? '新增工作表「' + escapeHtml(data.sheetName) + '」' : '文末追加「合并总表」表格';
+    box.innerHTML = '<div class="ok-line">✅ 合并完成：' + srcs.length + ' 个来源，共 ' + data.rows + ' 行数据，结果已写回原文件</div>'
+      + '<div class="muted">在原文件里' + where + '，原有内容全部保留</div>'
+      + '<div style="margin-top:8px"><a href="/api/download?name=' + encodeURIComponent(data.file) + '" download>📥 下载 ' + escapeHtml(data.file) + '</a></div>';
     box.classList.remove('hidden');
   } catch (err) {
     showErr(err.message);

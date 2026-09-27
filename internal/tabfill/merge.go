@@ -95,29 +95,57 @@ func WriteXlsxTable(headers []string, rows [][]string, dst string) error {
 	f.SetSheetName("Sheet1", sheet)
 
 	boldID, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
-	for c, h := range headers {
-		coord, _ := excelize.CoordinatesToCellName(c+1, 1)
-		if err := f.SetCellValue(sheet, coord, h); err != nil {
-			return fmt.Errorf("写表头失败: %w", err)
-		}
-		_ = f.SetCellStyle(sheet, coord, coord, boldID)
-	}
-	for r, rec := range rows {
-		for c := 0; c < len(headers); c++ {
-			v := ""
-			if c < len(rec) {
-				v = rec[c]
-			}
-			coord, _ := excelize.CoordinatesToCellName(c+1, r+2)
-			if err := f.SetCellValue(sheet, coord, typedValue(v)); err != nil {
-				return fmt.Errorf("写入 %s 失败: %w", coord, err)
-			}
-		}
+	if err := writeSheetData(f, sheet, headers, rows, boldID); err != nil {
+		return err
 	}
 	if err := f.SaveAs(dst); err != nil {
 		return fmt.Errorf("保存失败: %w", err)
 	}
 	return nil
+}
+
+// AppendMergedSheet 打开一个现有 xlsx，把合并结果追加为新的工作表
+//（原文件各 Sheet 原样保留、顺序不变），另存为 dst。
+// 返回实际使用的工作表名（与已有 Sheet 重名时自动加序号，如"合并总表2"）。
+func AppendMergedSheet(srcXlsx, dst, sheetName string, headers []string, rows [][]string) (string, error) {
+	f, err := excelize.OpenFile(srcXlsx)
+	if err != nil {
+		return "", fmt.Errorf("打开原文件失败: %w", err)
+	}
+	defer f.Close()
+
+	name, err := uniqueSheetName(f, sheetName)
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.NewSheet(name); err != nil {
+		return "", fmt.Errorf("创建工作表 %q 失败: %w", name, err)
+	}
+	boldID, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+	if err := writeSheetData(f, name, headers, rows, boldID); err != nil {
+		return "", err
+	}
+	if err := f.SaveAs(dst); err != nil {
+		return "", fmt.Errorf("保存失败: %w", err)
+	}
+	return name, nil
+}
+
+// uniqueSheetName 在 f 的现有工作表中给 want 找一个未占用的名字
+func uniqueSheetName(f *excelize.File, want string) (string, error) {
+	existing := map[string]bool{}
+	for _, s := range f.GetSheetList() {
+		existing[s] = true
+	}
+	if !existing[want] {
+		return want, nil
+	}
+	for i := 2; ; i++ {
+		cand := fmt.Sprintf("%s%d", want, i)
+		if !existing[cand] {
+			return cand, nil
+		}
+	}
 }
 
 // typedValue 把字符串还原为合适的单元格类型：

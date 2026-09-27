@@ -3,6 +3,8 @@ package tabfill
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
+	"io"
 	"os"
 	"strings"
 )
@@ -10,49 +12,11 @@ import (
 // WriteDocxTable 把表头＋数据行写成 docx（含一张全边框表格的 Word 文档）。
 // 从零生成最小 OOXML 结构：[Content_Types].xml + _rels/.rels + word/document.xml。
 func WriteDocxTable(headers []string, rows [][]string, title string, dst string) error {
-	var tbl strings.Builder
-	tbl.WriteString(`<w:tbl><w:tblPr><w:tblBorders>` +
-		`<w:top w:val="single" w:sz="4"/><w:left w:val="single" w:sz="4"/>` +
-		`<w:bottom w:val="single" w:sz="4"/><w:right w:val="single" w:sz="4"/>` +
-		`<w:insideH w:val="single" w:sz="4"/><w:insideV w:val="single" w:sz="4"/>` +
-		`</w:tblBorders></w:tblPr><w:tblGrid>`)
-	for range headers {
-		tbl.WriteString(`<w:gridCol w:w="2600"/>`)
-	}
-	tbl.WriteString(`</w:tblGrid>`)
-
-	cell := func(text string, bold bool) string {
-		run := ""
-		if text != "" {
-			rpr := ""
-			if bold {
-				rpr = `<w:rPr><w:b/></w:rPr>`
-			}
-			run = `<w:r>` + rpr + `<w:t xml:space="preserve">` + xmlEscape(text) + `</w:t></w:r>`
-		}
-		return `<w:tc><w:tcPr><w:tcW w:w="2600"/></w:tcPr><w:p>` + run + `</w:p></w:tc>`
-	}
-	row := func(cells []string, bold bool) string {
-		s := "<w:tr>"
-		for _, c := range cells {
-			s += cell(c, bold)
-		}
-		return s + "</w:tr>"
-	}
-	tbl.WriteString(row(headers, true))
-	for _, r := range rows {
-		rec := make([]string, len(headers))
-		copy(rec, r)
-		tbl.WriteString(row(rec, false))
-	}
-	tbl.WriteString(`</w:tbl>`)
-
 	var body strings.Builder
 	if title != "" {
-		body.WriteString(`<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="32"/></w:rPr><w:t>` +
-			xmlEscape(title) + `</w:t></w:r></w:p>`)
+		body.WriteString(titleParagraphXML(title))
 	}
-	body.WriteString(tbl.String() + `<w:sectPr/>`)
+	body.WriteString(buildTableXML(headers, rows) + `<w:sectPr/>`)
 
 	docXML := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
@@ -94,4 +58,126 @@ func WriteDocxTable(headers []string, rows [][]string, title string, dst string)
 func xmlEscape(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
 	return r.Replace(s)
+}
+
+// buildTableXML 生成一张全边框表格的 OOXML（<w:tbl>…</w:tbl>），首行加粗
+func buildTableXML(headers []string, rows [][]string) string {
+	var tbl strings.Builder
+	tbl.WriteString(`<w:tbl><w:tblPr><w:tblBorders>` +
+		`<w:top w:val="single" w:sz="4"/><w:left w:val="single" w:sz="4"/>` +
+		`<w:bottom w:val="single" w:sz="4"/><w:right w:val="single" w:sz="4"/>` +
+		`<w:insideH w:val="single" w:sz="4"/><w:insideV w:val="single" w:sz="4"/>` +
+		`</w:tblBorders></w:tblPr><w:tblGrid>`)
+	for range headers {
+		tbl.WriteString(`<w:gridCol w:w="2600"/>`)
+	}
+	tbl.WriteString(`</w:tblGrid>`)
+
+	cell := func(text string, bold bool) string {
+		run := ""
+		if text != "" {
+			rpr := ""
+			if bold {
+				rpr = `<w:rPr><w:b/></w:rPr>`
+			}
+			run = `<w:r>` + rpr + `<w:t xml:space="preserve">` + xmlEscape(text) + `</w:t></w:r>`
+		}
+		return `<w:tc><w:tcPr><w:tcW w:w="2600"/></w:tcPr><w:p>` + run + `</w:p></w:tc>`
+	}
+	row := func(cells []string, bold bool) string {
+		s := "<w:tr>"
+		for _, c := range cells {
+			s += cell(c, bold)
+		}
+		return s + "</w:tr>"
+	}
+	tbl.WriteString(row(headers, true))
+	for _, r := range rows {
+		rec := make([]string, len(headers))
+		copy(rec, r)
+		tbl.WriteString(row(rec, false))
+	}
+	tbl.WriteString(`</w:tbl>`)
+	return tbl.String()
+}
+
+// titleParagraphXML 居中加粗标题段落
+func titleParagraphXML(title string) string {
+	return `<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="32"/></w:rPr><w:t>` +
+		xmlEscape(title) + `</w:t></w:r></w:p>`
+}
+
+// AppendDocxTable 打开现有 docx，在文档末尾追加一张表格（标题段落＋表格＋空段落，
+// 原有内容原样保留），另存为 dst。追加位置在页面设置节（sectPr）之前，
+// 保证 Word/WPS 都能正常打开。
+func AppendDocxTable(srcDocx, dst, title string, headers []string, rows [][]string) error {
+	data, err := os.ReadFile(srcDocx)
+	if err != nil {
+		return fmt.Errorf("读取原文件失败: %w", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return fmt.Errorf("解析原文件失败: %w", err)
+	}
+
+	add := ""
+	if title != "" {
+		add += titleParagraphXML(title)
+	}
+	add += buildTableXML(headers, rows) + `<w:p/>` // 表格后必须跟一个段落
+
+	patched := false
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for _, fe := range zr.File {
+		fw, err := w.CreateHeader(&zip.FileHeader{Name: fe.Name, Method: zip.Deflate})
+		if err != nil {
+			return err
+		}
+		rc, err := fe.Open()
+		if err != nil {
+			return err
+		}
+		if fe.Name == "word/document.xml" {
+			body, err := io.ReadAll(rc)
+			rc.Close()
+			if err != nil {
+				return err
+			}
+			out, err := appendToBody(body, add)
+			if err != nil {
+				return err
+			}
+			if _, err := fw.Write(out); err != nil {
+				return err
+			}
+			patched = true
+			continue
+		}
+		if _, err := io.Copy(fw, rc); err != nil {
+			rc.Close()
+			return err
+		}
+		rc.Close()
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	if !patched {
+		return fmt.Errorf("原文件里没有 word/document.xml，不是有效的 docx 文档")
+	}
+	return os.WriteFile(dst, buf.Bytes(), 0o644)
+}
+
+// appendToBody 把追加内容插到 document.xml 的 </w:body> 之前（有 sectPr 时插到它前面）
+func appendToBody(docXML []byte, add string) ([]byte, error) {
+	s := string(docXML)
+	if i := strings.LastIndex(s, "<w:sectPr"); i >= 0 {
+		s = s[:i] + add + s[i:]
+	} else if i := strings.LastIndex(s, "</w:body>"); i >= 0 {
+		s = s[:i] + add + s[i:]
+	} else {
+		return nil, fmt.Errorf("document.xml 结构异常，找不到文档结尾")
+	}
+	return []byte(s), nil
 }
