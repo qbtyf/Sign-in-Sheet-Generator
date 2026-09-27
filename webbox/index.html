@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>表格工具箱</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-app-mode="__APP_MODE__">
+<header class="topbar">
+  <div class="brand" id="brand-home">🧰 表格工具箱</div>
+  <button id="btn-exit" class="btn-ghost hidden">退出程序</button>
+</header>
+
+<!-- ============ 首页：功能卡片 ============ -->
+<main id="view-home" class="container">
+  <p class="home-tip">点击卡片进入对应工具</p>
+  <div class="cards">
+    <div class="card available" data-tool="fill">
+      <div class="card-icon">📋</div>
+      <div class="card-title">表格填充</div>
+      <div class="card-desc">把原始表格的数据，按字段对应关系批量填进模板表格。支持 Excel ↔ Word 任意组合。</div>
+      <div class="card-badge ok">可用</div>
+    </div>
+    <div class="card coming">
+      <div class="card-icon">🔗</div>
+      <div class="card-title">多表合一</div>
+      <div class="card-desc">把多个结构相同的表格合并成一张总表。</div>
+      <div class="card-badge">规划中</div>
+    </div>
+    <div class="card coming">
+      <div class="card-icon">✂️</div>
+      <div class="card-title">拆分表格</div>
+      <div class="card-desc">把一张总表按条件拆成多个独立表格文件。</div>
+      <div class="card-badge">规划中</div>
+    </div>
+    <div class="card coming">
+      <div class="card-icon">📑</div>
+      <div class="card-title">表格内拆分</div>
+      <div class="card-desc">把一张表格按条件拆分为多个工作表（Sheet）。</div>
+      <div class="card-badge">规划中</div>
+    </div>
+  </div>
+</main>
+
+<!-- ============ 工具：表格填充 ============ -->
+<main id="view-fill" class="container hidden">
+  <div class="crumbs"><a id="back-home">← 返回首页</a><span class="crumb-sep">/</span><b>表格填充</b></div>
+
+  <div class="err hidden" id="err"></div>
+
+  <!-- 第①步：输入 -->
+  <section class="panel">
+    <h3><span class="step-no">1</span> 选择原始表格与模板表格</h3>
+    <div class="two-col">
+      <div class="src-box" id="box-src">
+        <h4>原始表格 <small>（数据来源）</small></h4>
+        <label class="upload-btn">＋ 选择 xlsx / docx 文件
+          <input type="file" id="file-src" accept=".xlsx,.docx" hidden>
+        </label>
+        <div class="src-detail hidden" id="detail-src">
+          <div class="field-row"><span class="fname" id="fname-src"></span></div>
+          <div class="field-row">
+            <label>数据源：</label>
+            <select id="sel-src"></select>
+          </div>
+          <div class="field-row">
+            <label>表头行：</label>
+            <input type="number" id="hdr-src" min="1" value="1" class="num">
+          </div>
+          <div class="meta" id="meta-src"></div>
+          <div class="chips" id="chips-src"></div>
+          <div class="preview-wrap"><table class="preview" id="prev-src"></table></div>
+        </div>
+      </div>
+      <div class="src-box" id="box-tpl">
+        <h4>模板表格 <small>（要填成的样子）</small></h4>
+        <label class="upload-btn">＋ 选择 xlsx / docx 文件
+          <input type="file" id="file-tpl" accept=".xlsx,.docx" hidden>
+        </label>
+        <div class="src-detail hidden" id="detail-tpl">
+          <div class="field-row"><span class="fname" id="fname-tpl"></span></div>
+          <div class="field-row">
+            <label>数据源：</label>
+            <select id="sel-tpl"></select>
+          </div>
+          <div class="field-row">
+            <label>表头行：</label>
+            <input type="number" id="hdr-tpl" min="1" value="1" class="num">
+          </div>
+          <div class="meta" id="meta-tpl"></div>
+          <div class="chips" id="chips-tpl"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 第②步：字段对齐 -->
+  <section class="panel" id="panel-map">
+    <h3><span class="step-no">2</span> 字段对齐 <small>（同名已自动配对，其余请手工选择；选「不填充」跳过该列）</small></h3>
+    <div id="map-list" class="map-list"></div>
+    <p class="hint hidden" id="map-hint">请先完成第 ① 步</p>
+  </section>
+
+  <!-- 第③步：生成 -->
+  <section class="panel">
+    <h3><span class="step-no">3</span> 生成</h3>
+    <button id="btn-fill" class="btn-primary">开始填充生成</button>
+    <div id="fill-result" class="result hidden"></div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
